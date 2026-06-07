@@ -133,6 +133,15 @@ def new_after(msgs, last_key):
     return [m for m in msgs if (m.get("createTime") or 0) > last_ct]
 
 
+def _extract_image_md5(raw_content):
+    """从 rawContent XML 提取图片 md5。失败返回 None。"""
+    try:
+        m = re.search(r'md5="([a-f0-9]{32})"', raw_content)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
 def download_media(env, wxid, local_id):
     """给图片/语音的 localId，走 WeFlow media=1 导出并下载解密后的媒体，
     返回 (媒体类型, base64编码数据)。失败返回 (None, None)。"""
@@ -159,6 +168,20 @@ def download_media(env, wxid, local_id):
                 except Exception as e:
                     print(f"    下载媒体失败: {e}")
                     return None, None
+            # Fallback: media=1 有时候不给 mediaUrl（WeFlow bug），
+            # 从 rawContent 提取 md5 直接构造媒体 URL
+            if msg.get("localType") == 3:
+                md5 = _extract_image_md5(msg.get("rawContent", ""))
+                if md5:
+                    for ext in (".jpg", ".png", ".gif", ".webp"):
+                        fb = f"{base}/api/v1/media/{wxid}/images/{md5}{ext}?access_token={tok}"
+                        try:
+                            with urllib.request.urlopen(fb, timeout=10) as r:
+                                b64 = base64.b64encode(r.read()).decode()
+                                print(f"    fallback 图片下载成功: {md5}{ext}")
+                                return "image", b64
+                        except Exception:
+                            continue
     return None, None
 
 
