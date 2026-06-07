@@ -93,41 +93,50 @@ def send_one(text):
     return True
 
 
-def send_image(raw_bytes):
-    """把图片二进制数据放到剪贴板，然后 Ctrl+V 粘贴到微信。"""
+def send_media(raw_bytes, prefix=""):
+    """把图片/语音二进制数据放到剪贴板，先打前缀文字，再粘贴媒体，回车发送。
+    文件名格式: {前缀}__{timestamp}.{ext}"""
     import io
     from PIL import Image
     import win32clipboard
 
     hwnd = find_wechat()
     if not hwnd:
-        log("ERROR 找不到微信窗口，跳过图片")
+        log("ERROR 找不到微信窗口，跳过媒体")
         return False
     if not focus(hwnd):
         time.sleep(0.5); focus(hwnd)
 
-    # 二进制 → PIL Image
+    # 写入剪贴板 (CF_DIB 格式)
     try:
         img = Image.open(io.BytesIO(raw_bytes))
+        output = io.BytesIO()
+        img.convert("RGB").save(output, "BMP")
+        data = output.getvalue()[14:]  # 去掉 BMP 文件头，留 DIB 数据
+        output.close()
     except Exception as e:
         log("图片解码失败", e)
         return False
 
-    # 写入剪贴板 (CF_DIB 格式)
-    output = io.BytesIO()
-    img.convert("RGB").save(output, "BMP")
-    data = output.getvalue()[14:]  # 去掉 BMP 文件头，留 DIB 数据
-    output.close()
     win32clipboard.OpenClipboard()
     win32clipboard.EmptyClipboard()
     win32clipboard.SetClipboardData(win32clipboard.CF_DIB, data)
     win32clipboard.CloseClipboard()
     time.sleep(0.15)
 
-    # 粘贴
+    # 点击输入框，如果带前缀先打字
     l, t, r, b = win32gui.GetWindowRect(hwnd)
     cx = l + int((r - l) * 0.55); cy = b - 70
     pyautogui.click(cx, cy); time.sleep(0.2)
+
+    if prefix:
+        pyautogui.hotkey("ctrl", "a"); time.sleep(0.1)
+        pyperclip.copy(prefix); time.sleep(0.1)
+        pyautogui.hotkey("ctrl", "v"); time.sleep(0.25)
+        # 按空格分开前缀和图片，然后粘贴图片
+        pyautogui.press("space"); time.sleep(0.1)
+
+    # 粘贴图片
     pyautogui.hotkey("ctrl", "v"); time.sleep(0.5)
     pyautogui.press("enter"); time.sleep(0.3)
     return True
@@ -151,9 +160,14 @@ def main():
                     continue
                 if not raw:
                     log("SKIP 空", name)
-                elif ext == ".img":
-                    ok = send_image(raw)
-                    log("SENT_IMG" if ok else "FAIL_IMG", name, f"{len(raw)} bytes")
+                elif ext == ".img" or ext == ".media":
+                    # 文件名格式: 前缀__timestamp.ext → 提取前缀
+                    prefix = ""
+                    base = os.path.splitext(name)[0]
+                    if "__" in base:
+                        prefix = base.split("__", 1)[0].replace("：", ":")
+                    ok = send_media(raw, prefix)
+                    log("SENT_MEDIA" if ok else "FAIL_MEDIA", name, f"{len(raw)} bytes")
                 else:
                     text = raw.decode("utf-8").rstrip("\n")
                     ok = send_one(text)

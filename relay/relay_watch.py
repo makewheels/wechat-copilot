@@ -125,12 +125,15 @@ def download_media(env, wxid, local_id):
     return None, None
 
 
-def push_image(env, wxid, m, client):
-    """导出图片原图，base64 编码后推送到 Windows .img 队列。"""
+def push_media(env, wxid, m, client, prefix):
+    """导出图片/语音媒体，base64 编码后推到 Windows 队列。
+    文件名带前缀：{prefix}__{timestamp}.{ext}，Windows 端解析前缀打印到输入框。"""
     mtype, b64 = download_media(env, wxid, m.get("localId"))
-    if not b64 or mtype not in ("image", None):
+    if not b64:
         return False
-    name = f"{time.time_ns()}.img"
+    ext = "img" if mtype in ("image", None) else "media"
+    safe_prefix = prefix.replace("\\", "").replace("/", "").replace(":", "：")[:60]
+    name = f"{safe_prefix}__{time.time_ns()}.{ext}"
     ps = (
         f"$b=[Convert]::FromBase64String('{b64}');"
         f"[IO.File]::WriteAllBytes('C:\\relay\\queue\\{name}',$b);'{name}'"
@@ -158,16 +161,16 @@ def process_once(env, contacts, state, echo_names, client_holder):
                 client_holder[0] = queue_push.make_client()
             for m in fresh:
                 lt = m.get("localType")
-                # 图片：导出解密后 base64 传到 Windows
-                if lt == 3:
-                    ok = push_image(env, wxid, m, client_holder[0])
-                    who = "我" if m.get("isSend") else name
+                who = "我" if m.get("isSend") else name
+                # 图片/语音：导出解密后 base64 传到 Windows（文件名单带前缀）
+                if lt in (3, 34):
+                    prefix = f"{who}: [图片]" if lt == 3 else f"{who}: [语音]"
+                    ok = push_media(env, wxid, m, client_holder[0], prefix)
                     if ok:
-                        queue_push.push(f"{who}: [图片]", client_holder[0])
-                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> {who}: [图片] (已传原图)")
+                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix} (已传原文件)")
                     else:
-                        queue_push.push(f"{who}: [图片]", client_holder[0])
-                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> {who}: [图片] (原图获取失败)")
+                        queue_push.push(prefix, client_holder[0])
+                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix} (原文件获取失败，发占位符)")
                 else:
                     line = fmt(name, m)
                     if not line:
