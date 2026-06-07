@@ -126,14 +126,11 @@ def download_media(env, wxid, local_id):
 
 
 def push_media(env, wxid, m, client, prefix):
-    """导出图片/语音媒体，base64 编码后推到 Windows 队列。
-    文件名带前缀：{prefix}__{timestamp}.{ext}，Windows 端解析前缀打印到输入框。"""
+    """导出图片原图，base64 后推送到 Windows .img 队列。前缀文字单独发。"""
     mtype, b64 = download_media(env, wxid, m.get("localId"))
     if not b64:
         return False
-    ext = "img" if mtype in ("image", None) else "media"
-    safe_prefix = prefix.replace("\\", "").replace("/", "").replace(":", "：")[:60]
-    name = f"{safe_prefix}__{time.time_ns()}.{ext}"
+    name = f"{time.time_ns()}.img"
     ps = (
         f"$b=[Convert]::FromBase64String('{b64}');"
         f"[IO.File]::WriteAllBytes('C:\\relay\\queue\\{name}',$b);'{name}'"
@@ -162,15 +159,17 @@ def process_once(env, contacts, state, echo_names, client_holder):
             for m in fresh:
                 lt = m.get("localType")
                 who = "我" if m.get("isSend") else name
-                # 图片/语音：导出解密后 base64 传到 Windows（文件名单带前缀）
-                if lt in (3, 34):
-                    prefix = f"{who}: [图片]" if lt == 3 else f"{who}: [语音]"
+                # 图片：先发文字前缀，再传原图（两条消息）
+                if lt == 3:
+                    prefix = f"{who}: [图片]"
+                    queue_push.push(prefix, client_holder[0])  # 文字前缀先进队列
                     ok = push_media(env, wxid, m, client_holder[0], prefix)
-                    if ok:
-                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix} (已传原文件)")
-                    else:
-                        queue_push.push(prefix, client_holder[0])
-                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix} (原文件获取失败，发占位符)")
+                    status = "已传原图" if ok else "原图获取失败"
+                    print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix} ({status})")
+                elif lt == 34:
+                    prefix = f"{who}: [语音]"
+                    queue_push.push(prefix, client_holder[0])  # 语音先发文字
+                    print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix}")
                 else:
                     line = fmt(name, m)
                     if not line:
