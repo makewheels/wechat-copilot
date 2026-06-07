@@ -40,7 +40,9 @@ import weflow
 import queue_push
 
 STATE = HERE / "relay_state.json"
+PENDING = HERE / "relay_pending.json"  # 失败的图片，周期性重试
 POLL = 4  # 秒
+MAX_RETRIES = 30  # 图片下载最多重试 30 次（~2 分钟）
 TRANSCRIBE_MODEL_DIR = os.path.expanduser("~/Documents/WeFlow/models/sensevoice")
 _recog = None  # 懒加载，避免启动就占模型内存
 
@@ -88,6 +90,14 @@ def load_state():
 
 def save_state(s):
     STATE.write_text(json.dumps(s, ensure_ascii=False, indent=2))
+
+
+def load_pending():
+    return json.loads(PENDING.read_text()) if PENDING.exists() else {}
+
+
+def save_pending(p):
+    PENDING.write_text(json.dumps(p, ensure_ascii=False, indent=2))
 
 
 def msg_key(m):
@@ -199,9 +209,47 @@ def push_media(env, wxid, m, client, prefix):
     return not had_err
 
 
-def process_once(env, contacts, state, echo_names, client_holder):
+def process_once(env, contacts, state, echo_names, client_holder, pending):
     """扫一遍所有盯的人，把新消息（文字+图片）转发出去。"""
     changed = False
+    pending_modified = False
+
+    # 先重试失败的图片
+    if pending and client_holder[0] is not None:
+        retry_keys = list(pending.keys())
+        for key in retry_keys:
+            entry = pending[key]
+            if entry.get("retries", 0) >= MAX_RETRIES:
+                print(f"[{datetime.datetime.now():%H:%M:%S}] 放弃重试 {key}")
+                del pending[key]
+                pending_modified = True
+                continue
+            wxid, local_id_str = key.split(":", 1)
+            local_id = int(local_id_str)
+            mtype, b64 = download_media(env, wxid, local_id)
+            if b64:
+                name = contacts.get(wxid, {}).get("name", wxid)
+                who = "我" if entry.get("isSend") else name
+                prefix = f"{who} 发了图片"
+                name_f = f"{time.time_ns()}.img"
+                ps = (
+                    f"$b=[Convert]::FromBase64String('{b64}');"
+                    f"[IO.File]::WriteAllBytes('C:\\relay\\queue\\{name_f}',$b);'{name_f}'"
+                )
+                _, _, had_err = client_holder[0].execute_ps(ps)
+                if not had_err:
+                    print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix} (重试成功)")
+                    del pending[key]
+                    pending_modified = True
+                else:
+                    entry["retries"] = entry.get("retries", 0) + 1
+                    pending_modified = True
+            else:
+                entry["retries"] = entry.get("retries", 0) + 1
+                pending_modified = True
+        if pending_modified and not pending:
+            save_pending(pending)
+
     for wxid, info in contacts.items():
         name = info.get("name", wxid)
         try:
@@ -224,8 +272,13 @@ def process_once(env, contacts, state, echo_names, client_holder):
                     prefix = f"{who} 发了图片"
                     queue_push.push(prefix, client_holder[0])
                     ok = push_media(env, wxid, m, client_holder[0], prefix)
-                    status = "已传原图" if ok else "原图获取失败"
-                    print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix} ({status})")
+                    if ok:
+                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix} (已传原图)")
+                    else:
+                        key = f"{wxid}:{m.get('localId')}"
+                        pending[key] = {"isSend": m.get("isSend"), "retries": 0}
+                        pending_modified = True
+                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix} (暂失败，将重试)")
                 elif lt == 34:
                     dur = ""
                     raw = m.get("rawContent") or m.get("content") or ""
@@ -258,6 +311,8 @@ def process_once(env, contacts, state, echo_names, client_holder):
             client_holder[0] = None
     if changed:
         save_state(state)
+    if pending_modified:
+        save_pending(pending)
 
 
 def parse_sse_revoke(data_line):
@@ -300,6 +355,7 @@ def run_sse(env, contacts):
     import threading
 
     state = load_state()
+    pending = load_pending()
     echo_names = {v.get("name", k) for k, v in contacts.items()} | {"我"}
     monitored_ids = set(contacts.keys())  # 只处理这些人的 SSE 事件
     client_holder = [None]
@@ -312,7 +368,7 @@ def run_sse(env, contacts):
         while True:
             time.sleep(POLL)
             with lock:
-                process_once(env, contacts, state, echo_names, client_holder)
+                process_once(env, contacts, state, echo_names, client_holder, pending)
 
     threading.Thread(target=periodic, daemon=True).start()
 
@@ -324,7 +380,7 @@ def run_sse(env, contacts):
                 req.add_header("Last-Event-ID", last_event_id)
             with urllib.request.urlopen(req, timeout=70) as r:
                 with lock:
-                    process_once(env, contacts, state, echo_names, client_holder)
+                    process_once(env, contacts, state, echo_names, client_holder, pending)
                 for raw in r:
                     line = raw.decode("utf-8", "replace").rstrip("\r\n")
                     if line.startswith("id:"):
@@ -354,7 +410,7 @@ def run_sse(env, contacts):
                                         pass
                         elif ev and ev != "ready":
                             with lock:
-                                process_once(env, contacts, state, echo_names, client_holder)
+                                process_once(env, contacts, state, echo_names, client_holder, pending)
         except KeyboardInterrupt:
             raise
         except Exception as e:
@@ -364,13 +420,14 @@ def run_sse(env, contacts):
 
 def run_poll(env, contacts):
     state = load_state()
+    pending = load_pending()
     echo_names = {v.get("name", k) for k, v in contacts.items()} | {"我"}
     client_holder = [None]
     init_state(env, contacts, state)
     names = [v.get("name", k) for k, v in contacts.items()]
     print(f"轮询监听启动，盯：{names}，每 {POLL}s 一次。")
     while True:
-        process_once(env, contacts, state, echo_names, client_holder)
+        process_once(env, contacts, state, echo_names, client_holder, pending)
         time.sleep(POLL)
 
 
