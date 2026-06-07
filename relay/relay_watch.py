@@ -161,14 +161,14 @@ def process_once(env, contacts, state, echo_names, client_holder):
                 who = "我" if m.get("isSend") else name
                 # 图片：先发文字前缀，再传原图（两条消息）
                 if lt == 3:
-                    prefix = f"{who}: [图片]"
-                    queue_push.push(prefix, client_holder[0])  # 文字前缀先进队列
+                    prefix = f"{who} 发了图片"
+                    queue_push.push(prefix, client_holder[0])
                     ok = push_media(env, wxid, m, client_holder[0], prefix)
                     status = "已传原图" if ok else "原图获取失败"
                     print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix} ({status})")
                 elif lt == 34:
-                    prefix = f"{who}: [语音]"
-                    queue_push.push(prefix, client_holder[0])  # 语音先发文字
+                    prefix = f"{who} 发了语音"
+                    queue_push.push(prefix, client_holder[0])
                     print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix}")
                 else:
                     line = fmt(name, m)
