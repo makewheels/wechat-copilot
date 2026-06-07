@@ -1,0 +1,23 @@
+# --- 密钥/凭证（绝不上传） ---
+.env
+*.env
+!.env.example
+.lark-cli/
+
+# --- 个人数据（真实聊天/联系人/书稿，绝不上传） ---
+data/
+book/
+output/
+reply.html
+
+# --- 运行产物/日志/截图 ---
+*.log
+*.png
+*.b64
+relay/relay_state.json
+
+# --- 杂项 ---
+__pycache__/
+*.pyc
+.venv/
+.DS_Store

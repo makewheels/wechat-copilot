@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>微信恋爱军师 · 全流程</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#171a21; --card2:#1d212b; --line:#2a2f3a;
+    --txt:#e6e8ec; --muted:#9aa3b2;
+    --you:#34d399;      /* 你的编排代码 */
+    --mem:#60a5fa;      /* Mem0 记忆层 */
+    --llm:#fbbf24;      /* 大模型调用 */
+    --store:#c084fc;    /* 存储写入 */
+    --front:#f472b6;    /* 手机前端 */
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,"PingFang SC","Helvetica Neue",Arial,sans-serif;
+    line-height:1.65;font-size:15px}
+  .wrap{max-width:900px;margin:0 auto;padding:36px 18px 80px}
+  h1{font-size:27px;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 22px;font-size:14px}
+  h2{font-size:18px;margin:36px 0 14px;border-left:3px solid var(--you);padding-left:10px}
+  .legend{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 8px}
+  .chip{font-size:12px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);display:flex;align-items:center;gap:6px}
+  .dot{width:9px;height:9px;border-radius:50%}
+  .arrow{text-align:center;color:var(--muted);font-size:20px;line-height:1;margin:3px 0}
+  .box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:0 auto}
+  .b-front{border-left:4px solid var(--front)}
+  .b-you{border-left:4px solid var(--you)}
+  .b-mem{border-left:4px solid var(--mem)}
+  .b-llm{border-left:4px solid var(--llm)}
+  .b-store{border-left:4px solid var(--store)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+  .row .box{flex:1;min-width:180px;margin:0}
+  .tag{font-size:11px;padding:1px 7px;border-radius:5px;background:#0b0d12;border:1px solid var(--line);color:var(--muted)}
+  .inp{display:inline-block;background:#0b0d12;border:1px dashed #3a4150;border-radius:7px;padding:4px 9px;margin:3px 4px 0 0;font-size:13px}
+  code{background:#0b0d12;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:12.5px;font-family:"SF Mono",ui-monospace,Menlo,monospace;color:#cbd5e1}
+  /* 时序步骤 */
+  .step{display:flex;gap:13px;margin:0}
+  .num{flex:none;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:14px;color:#06281d}
+  .step .body{flex:1;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 15px}
+  .step .body h3{margin:0 0 4px;font-size:15px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .step .body p{margin:3px 0 0;color:var(--muted);font-size:13.5px}
+  .s-you .num{background:var(--you)} .s-you .body{border-left:4px solid var(--you)}
+  .s-mem .num{background:var(--mem)} .s-mem .body{border-left:4px solid var(--mem)}
+  .s-llm .num{background:var(--llm)} .s-llm .body{border-left:4px solid var(--llm)}
+  .s-store .num{background:var(--store)} .s-store .body{border-left:4px solid var(--store)}
+  .s-front .num{background:var(--front)} .s-front .body{border-left:4px solid var(--front)}
+  .badge{font-size:11px;padding:1px 8px;border-radius:999px;font-weight:600}
+  .badge-llm{background:#2b2410;color:var(--llm);border:1px solid #5a4a1a}
+  .conn{width:2px;height:14px;background:var(--line);margin:0 0 0 14px}
+  .note{background:#11161f;border:1px solid var(--line);border-radius:10px;padding:12px 15px;color:var(--muted);font-size:13.5px}
+  .hl{color:var(--txt)}
+  b.you{color:var(--you)} b.mem{color:var(--mem)} b.llm{color:var(--llm)} b.store{color:var(--store)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>微信恋爱军师 · 全流程</h1>
+  <p class="sub">一轮聊天：从你手机输入 → 取记忆 → 调模型 → 出建议 → 存回去。拿「王玲」举例。</p>
+
+  <div class="legend">
+    <span class="chip"><span class="dot" style="background:var(--front)"></span>手机前端</span>
+    <span class="chip"><span class="dot" style="background:var(--you)"></span>你的编排代码(薄)</span>
+    <span class="chip"><span class="dot" style="background:var(--mem)"></span>Mem0 记忆层</span>
+    <span class="chip"><span class="dot" style="background:var(--llm)"></span>🤖 大模型调用</span>
+    <span class="chip"><span class="dot" style="background:var(--store)"></span>存储写入</span>
+  </div>
+
+  <!-- ===== A 总览 ===== -->
+  <h2>A. 总览：谁跟谁连</h2>
+
+  <div class="box b-front" style="max-width:640px">
+    <b style="color:var(--front)">📱 手机前端</b>（网页 / 企业微信 / 飞书，先不重要）<br>
+    <span class="inp">选对象：王玲</span>
+    <span class="inp">对方说了什么：「在吗」</span>
+    <span class="inp">我的意图/画外音：「想周末约她划船」</span>
+  </div>
+  <div class="arrow">▼ 发给后端</div>
+
+  <div class="box b-you" style="max-width:640px;text-align:center">
+    <b class="you">🧠 你的薄编排层（coach core）</b><br>
+    <span style="color:var(--muted);font-size:13px">≈100 行：取记忆 → 拼 prompt → 调模型 → 存回去。下面四样是它会用到的。</span>
+  </div>
+  <div class="arrow">▼ 它会调用 / 读取</div>
+
+  <div class="row">
+    <div class="box b-mem"><b class="mem">🗂 Mem0 记忆层</b><br><span class="tag">向量库Qdrant + SQLite</span><br><span style="color:var(--muted);font-size:13px">按 <code>user_id=王玲</code> 隔离<br>存"抽出来的事实"，能语义检索</span></div>
+    <div class="box b-store"><b class="store">📜 messages.jsonl</b><br><span class="tag">原文真相源</span><br><span style="color:var(--muted);font-size:13px">逐字原文，append-only<br>能完整回放</span></div>
+    <div class="box b-llm"><b class="llm">🤖 Qwen3-Max</b><br><span class="tag">DashScope</span><br><span style="color:var(--muted);font-size:13px">生成回复 / 给 Mem0 抽记忆<br>都走它</span></div>
+    <div class="box b-front" style="border-left-color:#7dd3fc"><b style="color:#7dd3fc">🎭 人设 + 📖 一秒心动精要</b><br><span class="tag">静态</span><br><span style="color:var(--muted);font-size:13px">定调子：治直男味、油腻过滤</span></div>
+  </div>
+  <div class="arrow">▼ 出结果</div>
+  <div class="box b-front" style="max-width:640px;border-left-color:var(--front)">
+    <b style="color:var(--front)">📱 回到手机给你看</b>：① 她在想啥　② 现在啥阶段　③ 2–3 条草稿(带策略)　④ 风险提醒
+  </div>
+
+  <!-- ===== B 时序 ===== -->
+  <h2>B. 一轮的 6 步（重点看这个）</h2>
+
+  <div class="step s-front"><div class="num">1</div><div class="body">
+    <h3>📱 你在手机输入</h3>
+    <p>选「王玲」+ 她发的「在吗」+ 你的意图「想周末约她划船」。前端把这仨发给后端。</p>
+  </div></div>
+  <div class="conn"></div>
+
+  <div class="step s-mem"><div class="num">2</div><div class="body">
+    <h3>🗂 取记忆 <span class="tag">你的代码调 m.search(user_id=王玲)</span></h3>
+    <p>Mem0 语义检索回这个人的相关记忆，比如：「她爱机器人/AI」「聊了三年从没正经约过」「上次约会顾虑是怕太频繁」。<b class="mem">这步不调大模型，只做向量检索。</b></p>
+  </div></div>
+  <div class="conn"></div>
+
+  <div class="step s-you"><div class="num">3</div><div class="body">
+    <h3>🧠 拼 prompt <span class="tag">你的代码</span></h3>
+    <p>把这些拼成一个输入：<span class="hl">人设 + 一秒心动精要 + 第2步检索到的记忆 + 最近 N 条原文 + 她的「在吗」+ 你的意图「约划船」</span>。</p>
+  </div></div>
+  <div class="conn"></div>
+
+  <div class="step s-llm"><div class="num">4</div><div class="body">
+    <h3>🤖 生成 <span class="badge badge-llm">大模型调用 ①</span></h3>
+    <p><b class="you">你的代码直接调 Qwen3-Max</b>（就是 coach.py 里那个调用），吐出：分析 + 2–3 条草稿（含"借划船顺势约线下"那种）。</p>
+  </div></div>
+  <div class="conn"></div>
+
+  <div class="step s-front"><div class="num">5</div><div class="body">
+    <h3>📱 给你看 ＋ 📜 存原文 <span class="badge" style="background:#221a2e;color:var(--store);border:1px solid #4a2d6e">存储</span></h3>
+    <p>结果回手机给你挑/改/发；<b class="store">同时把她的「在吗」+ 你这轮的话/意图，原样 append 进 <code>王玲/messages.jsonl</code></b>（真相源）。</p>
+  </div></div>
+  <div class="conn"></div>
+
+  <div class="step s-mem"><div class="num">6</div><div class="body">
+    <h3>🗂 写回记忆 <span class="tag">你的代码调 m.add(这轮, user_id=王玲)</span> <span class="badge badge-llm">大模型调用 ②（Mem0 内部）</span></h3>
+    <p><b class="mem">Mem0 在 add 内部自己调一次 LLM</b>，把这轮里值钱的事实抽出来、跟旧记忆比对合并（增/改/删）、embedding 存进向量库。<span class="hl">这就是"自动总结/压缩"，你不用写。</span> → 下次再聊，第 2 步就能搜到它，这就是「继续接话」。</p>
+  </div></div>
+
+  <!-- ===== C 存储分工 ===== -->
+  <h2>C. 三块存储，各管各的</h2>
+  <div class="row">
+    <div class="box b-store"><b class="store">📜 messages.jsonl</b><p style="margin:6px 0 0;color:var(--muted);font-size:13px">逐字原文 · 真相源 · 能回放。<br>(你说的"原文很重要"，存这)</p></div>
+    <div class="box b-mem"><b class="mem">🗂 Mem0（向量库+SQLite）</b><p style="margin:6px 0 0;color:var(--muted);font-size:13px">从原文蒸馏的事实/记忆 · 能语义检索 · 自动压缩。</p></div>
+    <div class="box b-front" style="border-left-color:#7dd3fc"><b style="color:#7dd3fc">🎭 人设 + 📖 书精要</b><p style="margin:6px 0 0;color:var(--muted);font-size:13px">静态调子 · 治直男味/油腻。每次都进 prompt。</p></div>
+  </div>
+
+  <!-- ===== D 关键澄清 ===== -->
+  <h2>D. 记住两件事</h2>
+  <div class="note">
+    <p style="margin:0 0 8px"><b class="llm">① 一轮两次大模型调用</b>：第 4 步<span class="hl">你生成回复</span>（直接调）；第 6 步 <span class="hl">Mem0 抽记忆</span>（它内部调）。都走 Qwen/DashScope，全留国内。</p>
+    <p style="margin:0"><b class="mem">② Mem0 不存逐字原文</b>，只存蒸馏的记忆。原文你自己用 <code>messages.jsonl</code> 存。两者分工，缺一不可。</p>
+  </div>
+
+  <p class="sub" style="margin-top:30px">落地顺序：先把第 2–6 步做成命令行内核（拿你真实聊天验证），再套手机前端（网页 / 企业微信）。</p>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>微信 AI 陪聊助手 · 计划</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#171a21; --card2:#1d212b; --line:#2a2f3a;
+    --txt:#e6e8ec; --muted:#9aa3b2; --accent:#34d399; --accent2:#60a5fa;
+    --warn:#fbbf24; --danger:#f87171;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,"PingFang SC","Helvetica Neue",Arial,sans-serif;
+    line-height:1.7;font-size:16px}
+  .wrap{max-width:880px;margin:0 auto;padding:40px 20px 80px}
+  h1{font-size:30px;margin:0 0 6px;letter-spacing:.5px}
+  .sub{color:var(--muted);margin:0 0 28px;font-size:15px}
+  h2{font-size:20px;margin:34px 0 14px;display:flex;align-items:center;gap:10px}
+  h2 .dot{width:10px;height:10px;border-radius:50%;background:var(--accent)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:18px 20px;margin:12px 0}
+  ul{margin:8px 0;padding-left:20px}
+  li{margin:6px 0}
+  .tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:999px;
+    background:#243042;color:var(--accent2);margin-right:6px}
+  .pill{display:inline-block;font-size:12px;padding:2px 9px;border-radius:6px;
+    background:#0e2b22;color:var(--accent);border:1px solid #1f4d3d;margin:2px 4px 2px 0}
+  code{background:#0b0d12;border:1px solid var(--line);border-radius:6px;
+    padding:1px 6px;font-size:13px;font-family:"SF Mono",ui-monospace,Menlo,monospace;color:#cbd5e1}
+  pre{background:#0b0d12;border:1px solid var(--line);border-radius:12px;
+    padding:16px;overflow:auto;font-size:13px;line-height:1.55;color:#cbd5e1}
+  .flow{font-family:"SF Mono",ui-monospace,Menlo,monospace;color:#a7f3d0;white-space:pre}
+  .step{display:flex;gap:14px;margin:14px 0}
+  .num{flex:none;width:30px;height:30px;border-radius:50%;background:var(--accent);
+    color:#06281d;font-weight:700;display:grid;place-items:center;font-size:15px}
+  .step .body{flex:1}
+  .step h3{margin:2px 0 6px;font-size:16px}
+  .warn{border-color:#5a4a1a;background:#1f1b10}
+  .warn .t{color:var(--warn);font-weight:600}
+  .ok{color:var(--accent)} .no{color:var(--danger)}
+  .muted{color:var(--muted)}
+  .kv{display:grid;grid-template-columns:120px 1fr;gap:6px 14px;font-size:15px}
+  .kv .k{color:var(--muted)}
+  footer{margin-top:40px;color:var(--muted);font-size:13px;text-align:center}
+  a{color:var(--accent2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>微信 AI 陪聊助手 · 单 HTML 版</h1>
+  <p class="sub">项目代号 <code>wechat-copilot</code> ·读你的微信聊天记录 + 学《一秒心动》→ 生成回复草稿 → 网页里看、复制、去微信发</p>
+
+  <div class="card">
+    <div class="kv">
+      <div class="k">我要做的</div><div>读某个联系人的聊天 → 结合书生成"该怎么回" → 产出一个 <b>HTML</b>,你浏览器打开看草稿、一键复制 → 自己到微信发</div>
+      <div class="k">为什么这样</div><div>WeFlow 只能<b>读</b>不能<b>发</b>,所以"发"这一步由你手动完成(顺带零封号风险)</div>
+      <div class="k">谁来生成</div><div>就是我(Claude),不另搭后端 / 不调外部模型 / 不要 API key</div>
+    </div>
+  </div>
+
+  <h2><span class="dot"></span>现状盘点(已确认)</h2>
+  <div class="card">
+    <ul>
+      <li>本机 <b>Apple M4 / arm64</b>、<b>WeChat 4.1.7</b> — <span class="ok">✅ 满足 WeFlow 要求</span></li>
+      <li>WeFlow <span class="warn">还没装</span>,5031 端口未监听 → 第一步要先装</li>
+      <li>WeFlow API 全是读取类(会话/消息/联系人/朋友圈),<span class="no">没有"发消息"接口</span></li>
+      <li>已有 <code>~/workspace/media/wechat-analyzer</code> 是<b>分析</b>产线 → 本项目<b>新建独立目录</b>,只复用它的 <code>weflow_client.py</code>(纯标准库,无依赖)</li>
+      <li>书已就位:<code>~/Downloads/一秒心动+A5+208.pdf</code>(48MB / 208 页)</li>
+    </ul>
+  </div>
+
+  <h2><span class="dot"></span>形态决策</h2>
+  <div class="card">
+    <span class="pill">就一个 HTML</span>
+    <span class="pill">无后端</span>
+    <span class="pill">无服务</span>
+    <span class="pill">无 API key</span>
+    <span class="pill">无构建工具</span>
+    <span class="pill">只做单人</span>
+    <span class="pill">人在回路发送</span>
+    <p class="muted" style="margin:10px 0 0">"读对话 + 结合书生成草稿"由我在会话里做,结果渲染成单个 HTML;HTML 只负责展示草稿 + 复制。先跑通,满意后再谈自动化。</p>
+  </div>
+
+  <h2><span class="dot"></span>数据流</h2>
+  <pre class="flow">WeChat(4.1.7) → WeFlow(本机:5031 只读) → fetch.py 拉某人最近对话
+《一秒心动》PDF → 抽文本 → 风格/话术要点(我提炼)
+      → 我读「对话 + 书要点」生成 1~3 条候选回复
+      → 渲染成 reply.html(对话回顾 + 候选草稿 + 每条「复制」按钮)
+      → 浏览器打开 reply.html → 复制 → 去微信发</pre>
+
+  <h2><span class="dot"></span>执行步骤</h2>
+
+  <div class="step"><div class="num">1</div><div class="body">
+    <h3>安装并启动 WeFlow <span class="muted">(你在界面操作,我指导)</span></h3>
+    <div class="card" style="margin:6px 0">
+    <ul>
+      <li>GitHub Releases 下 <b>arm64 的 .dmg</b> → 拖进 <code>/Applications</code></li>
+      <li>首启被拦:<code>系统设置 → 隐私与安全性 → 仍要打开</code>;读库可能需在<b>完全磁盘访问权限</b>里勾选 WeFlow</li>
+      <li>微信保持登录 → WeFlow 加载数据 → <code>设置 → API 服务 → 启动服务</code>(默认端口 <b>5031</b>),记下 access_token</li>
+      <li>验证:<code>curl http://127.0.0.1:5031/api/v1/health</code> 正常</li>
+    </ul>
+    </div>
+  </div></div>
+
+  <div class="step"><div class="num">2</div><div class="body">
+    <h3>提炼书要点</h3>
+    <div class="card" style="margin:6px 0">抽出 PDF 文本,我读后提炼成精简要点(核心话术原则 + 语气风格 + 范例句式),生成时参考——<b>不每次塞整本 208 页</b>。</div>
+  </div></div>
+
+  <div class="step"><div class="num">3</div><div class="body">
+    <h3>新建项目 <code>~/workspace/tools/wechat-copilot/</code></h3>
+    <div class="card" style="margin:6px 0">
+    <ul>
+      <li>复用 <code>weflow_client.py</code>(从 analyzer 拷一份)</li>
+      <li><code>fetch.py</code>:给联系人关键词 + 条数,解析 wxid、拉最近对话、清洗成 <code>时间 / 谁 / 文本</code></li>
+      <li><code>.env</code> + <code>.gitignore</code>(token、PDF、output、reply.html 不入库)</li>
+    </ul>
+    </div>
+  </div></div>
+
+  <div class="step"><div class="num">4</div><div class="body">
+    <h3>陪聊循环</h3>
+    <div class="card" style="margin:6px 0">你说"帮我回 XX" → 我跑 <code>fetch.py</code> 取对话 → 结合书生成 1~3 条候选 → 渲染 <code>reply.html</code> → 你浏览器打开、复制满意的一条 → 去微信发。</div>
+  </div></div>
+
+  <h2><span class="dot"></span>前提与风险</h2>
+  <div class="card warn">
+    <p class="t">注意</p>
+    <ul>
+      <li><b>WeFlow 读库权限</b>:Mac 上可能需"完全磁盘访问权限"且微信在登录态;拉不到数据按此排查</li>
+      <li><b>封号风险</b>:全程不自动发微信(人在回路),风险极低</li>
+      <li><b>隐私</b>:聊天记录、书、草稿全程本机处理,token 走 .env</li>
+    </ul>
+  </div>
+
+  <h2><span class="dot"></span>怎么算跑通</h2>
+  <div class="card">
+    <ul>
+      <li>WeFlow API 健康、能列会话</li>
+      <li><code>fetch.py</code> 能拿到某人正确的最近对话</li>
+      <li>生成的 <code>reply.html</code>:草稿贴合《一秒心动》风格、契合当前上下文,复制按钮可用</li>
+    </ul>
+  </div>
+
+  <footer>这就是 reply.html 大概长什么样的预览 —— 真正的草稿页会在这个壳子里放候选回复 + 复制按钮</footer>
+</div>
+</body>
+</html>
