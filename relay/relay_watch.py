@@ -55,7 +55,20 @@ def msg_key(m):
 def fmt(name, m):
     who = "我" if m.get("isSend") else name
     lt = m.get("localType")
-    txt = (m.get("content") or "").strip() if lt == 1 else (weflow.TAG.get(lt) or "[其他]")
+    content = (m.get("content") or "").strip()
+
+    # 撤回检测：localType=10000 且含 revokemsg 的 XML
+    if lt == 10000 and "<revokemsg>" in content:
+        who_str = "你" if m.get("isSend") else name
+        return f"[{who_str} 撤回了一条消息]"
+
+    # 语音：WeFlow 开了自动转文字后 content 就是识别结果
+    if lt == 34:
+        if content:
+            return f"{who}: [语音] {content}"
+        return f"{who}: [语音]"
+
+    txt = content if lt == 1 else (weflow.TAG.get(lt) or "[其他]")
     if not txt:
         return None
     return f"{who}: {txt}"
