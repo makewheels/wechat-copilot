@@ -93,23 +93,71 @@ def send_one(text):
     return True
 
 
+def send_image(b64_data):
+    """把 base64 图片解码后放到剪贴板，然后 Ctrl+V 粘贴到微信。"""
+    import io, tempfile
+    from PIL import Image
+    import win32clipboard
+
+    hwnd = find_wechat()
+    if not hwnd:
+        log("ERROR 找不到微信窗口，跳过图片")
+        return False
+    if not focus(hwnd):
+        time.sleep(0.5); focus(hwnd)
+
+    # 解码 base64 → PIL Image
+    try:
+        img = Image.open(io.BytesIO(base64.b64decode(b64_data)))
+    except Exception as e:
+        log("图片解码失败", e)
+        return False
+
+    # 写入剪贴板 (CF_DIB 格式)
+    output = io.BytesIO()
+    img.convert("RGB").save(output, "BMP")
+    data = output.getvalue()[14:]  # 去掉 BMP 文件头，留 DIB 数据
+    output.close()
+    win32clipboard.OpenClipboard()
+    win32clipboard.EmptyClipboard()
+    win32clipboard.SetClipboardData(win32clipboard.CF_DIB, data)
+    win32clipboard.CloseClipboard()
+    time.sleep(0.15)
+
+    # 粘贴
+    l, t, r, b = win32gui.GetWindowRect(hwnd)
+    cx = l + int((r - l) * 0.55); cy = b - 70
+    pyautogui.click(cx, cy); time.sleep(0.2)
+    pyautogui.hotkey("ctrl", "v"); time.sleep(0.5)
+    pyautogui.press("enter"); time.sleep(0.3)
+    return True
+
+
 def main():
     log("relay_server 启动 pid", os.getpid())
     while True:
         try:
-            for fp in sorted(glob.glob(os.path.join(QUEUE, "*.txt"))):
+            items = []
+            items += sorted(glob.glob(os.path.join(QUEUE, "*.txt")))
+            items += sorted(glob.glob(os.path.join(QUEUE, "*.img")))
+            for fp in items:
                 name = os.path.basename(fp)
+                ext = os.path.splitext(name)[1]
                 try:
-                    with open(fp, "r", encoding="utf-8") as f:
-                        text = f.read().rstrip("\n")
+                    with open(fp, "rb") as f:
+                        raw = f.read()
                 except Exception as e:
                     log("读文件失败", name, e)
                     continue
-                if text:
+                if not raw:
+                    log("SKIP 空", name)
+                elif ext == ".img":
+                    ok = send_image(raw.decode("ascii"))
+                    log("SENT_IMG" if ok else "FAIL_IMG", name, f"{len(raw)} bytes")
+                else:
+                    text = raw.decode("utf-8").rstrip("\n")
                     ok = send_one(text)
                     log("SENT" if ok else "FAIL", name, repr(text[:80]))
-                else:
-                    log("SKIP 空", name)
                 try:
                     shutil.move(fp, os.path.join(DONE, name))
                 except Exception:
