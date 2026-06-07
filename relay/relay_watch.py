@@ -52,6 +52,11 @@ def msg_key(m):
     return f"{m.get('createTime')}:{m.get('localId')}"
 
 
+# 撤回还原缓存：记下最近 N 条已转发的文字消息（isSend + 内容），
+# 撤回事件来的时候匹配回去，显示 "xx 撤回了一条消息: 原内容"
+RECALL_CACHE = {}  # { (会话wxid, isSend): 最后一条文字内容 }
+
+
 def fmt(name, m):
     who = "我" if m.get("isSend") else name
     lt = m.get("localType")
@@ -60,6 +65,10 @@ def fmt(name, m):
     # 撤回检测：localType=10000 且含 revokemsg 的 XML
     if lt == 10000 and "<revokemsg>" in content:
         who_str = "你" if m.get("isSend") else name
+        cache_key = (str(m.get('senderUsername') or ''), m.get('isSend'))
+        cached = RECALL_CACHE.pop(cache_key, "")
+        if cached:
+            return f"[{who_str} 撤回了一条消息: {cached}]"
         return f"[{who_str} 撤回了一条消息]"
 
     # 语音：WeFlow 开了自动转文字后 content 就是识别结果
@@ -120,6 +129,9 @@ def process_once(env, contacts, state, echo_names, client_holder):
                     continue
                 queue_push.push(line, client_holder[0])
                 print(f"[{datetime.datetime.now():%H:%M:%S}] -> {line[:60]}")
+                # 撤回还原：缓存最近的文字消息
+                if m.get('localType') == 1:
+                    RECALL_CACHE[(wxid, m.get('isSend'))] = (m.get('content') or '').strip()[:80]
             state[wxid] = msg_key(msgs[-1]); changed = True
         except Exception as e:
             print(f"[err] {name}: {e}")
