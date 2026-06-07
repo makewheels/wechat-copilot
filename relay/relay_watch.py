@@ -18,14 +18,17 @@ API 文档：~/workspace/tools/WeFlow/docs/HTTP-API.md
 """
 import base64
 import datetime
+import io
 import json
 import os
 import re
+import struct
 import sys
 import tempfile
 import time
 import urllib.parse
 import urllib.request
+import wave
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -37,7 +40,41 @@ import weflow
 import queue_push
 
 STATE = HERE / "relay_state.json"
-POLL = 4  # 秒（--poll 模式的轮询间隔 / SSE 模式的定时兜底）
+POLL = 4  # 秒
+TRANSCRIBE_MODEL_DIR = os.path.expanduser("~/Documents/WeFlow/models/sensevoice")
+_recog = None  # 懒加载，避免启动就占模型内存
+
+
+def _get_recognizer():
+    global _recog
+    if _recog is None:
+        from sherpa_onnx import offline_recognizer
+        _recog = offline_recognizer.OfflineRecognizer.from_sense_voice(
+            model=os.path.join(TRANSCRIBE_MODEL_DIR, "model.int8.onnx"),
+            tokens=os.path.join(TRANSCRIBE_MODEL_DIR, "tokens.txt"),
+            language="zh",
+            use_itn=True,
+            num_threads=2,
+        )
+    return _recog
+
+
+def transcribe_wav(wav_bytes):
+    """16-bit PCM WAV → 转文字。失败返回 None。"""
+    try:
+        with wave.open(io.BytesIO(wav_bytes), 'rb') as wf:
+            sr = wf.getframerate()
+            raw = wf.readframes(wf.getnframes())
+        n = len(raw) // 2
+        floats = [s / 32768.0 for s in struct.unpack(f'<{n}h', raw)]
+        rec = _get_recognizer()
+        s = rec.create_stream()
+        s.accept_waveform(sr, floats)
+        rec.decode_stream(s)
+        return (s.result.text or "").strip()
+    except Exception as e:
+        print(f"    语音转文字失败: {e}")
+        return None
 
 
 def load_contacts():
@@ -173,7 +210,14 @@ def process_once(env, contacts, state, echo_names, client_holder):
                     if m_len:
                         sec = int(m_len.group(1)) // 1000
                         dur = f" {sec}s" if sec < 60 else f" {sec//60}m{sec%60}s"
-                    prefix = f"{who} 发了语音{dur}"
+                    # 下载 WAV → ONNX 转文字
+                    _, wav_b64 = download_media(env, wxid, m.get("localId"))
+                    text = ""
+                    if wav_b64:
+                        wav_bytes = base64.b64decode(wav_b64)
+                        text = transcribe_wav(wav_bytes) or ""
+                    suffix = f": {text}" if text else ""
+                    prefix = f"{who} 发了语音{dur}{suffix}"
                     queue_push.push(prefix, client_holder[0])
                     print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix}")
                 else:

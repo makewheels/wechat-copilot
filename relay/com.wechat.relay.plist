@@ -12,6 +12,8 @@
         <string>run</string>
         <string>--with</string>
         <string>pypsrp</string>
+        <string>--with</string>
+        <string>sherpa-onnx</string>
         <string>python</string>
         <string>-u</string>
         <string>relay_watch.py</string>
