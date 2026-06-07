@@ -167,7 +167,13 @@ def process_once(env, contacts, state, echo_names, client_holder):
                     status = "已传原图" if ok else "原图获取失败"
                     print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix} ({status})")
                 elif lt == 34:
-                    prefix = f"{who} 发了语音"
+                    dur = ""
+                    raw = m.get("rawContent") or m.get("content") or ""
+                    m_len = re.search(r'voicelength="(\d+)"', str(raw))
+                    if m_len:
+                        sec = int(m_len.group(1)) // 1000
+                        dur = f" {sec}s" if sec < 60 else f" {sec//60}m{sec%60}s"
+                    prefix = f"{who} 发了语音{dur}"
                     queue_push.push(prefix, client_holder[0])
                     print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix}")
                 else:
