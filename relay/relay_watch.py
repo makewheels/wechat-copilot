@@ -132,22 +132,38 @@ def sse_url(env):
 
 
 def run_sse(env, contacts):
+    import threading
+
     state = load_state()
     echo_names = {v.get("name", k) for k, v in contacts.items()} | {"我"}
     client_holder = [None]
+    lock = threading.Lock()
     init_state(env, contacts, state)
     names = [v.get("name", k) for k, v in contacts.items()]
-    print(f"SSE 订阅启动，盯：{names}。来一条转一条。Ctrl+C 停。")
+    print(f"SSE 订阅启动，盯：{names}。SSE 收消息近实时 + {POLL}s 定时兜底发消息。Ctrl+C 停。")
+
+    def periodic():
+        """定时兜底：WeFlow SSE 只推 incoming (isSend=0)，不推自己发的 (isSend=1)。
+        所以每 POLL 秒扫一遍，补上 outgoing 的。"""
+        while True:
+            time.sleep(POLL)
+            with lock:
+                process_once(env, contacts, state, echo_names, client_holder)
+
+    threading.Thread(target=periodic, daemon=True).start()
+
     while True:
         try:
             with urllib.request.urlopen(urllib.request.Request(sse_url(env)), timeout=70) as r:
-                process_once(env, contacts, state, echo_names, client_holder)  # 连上先补一遍
+                with lock:
+                    process_once(env, contacts, state, echo_names, client_holder)  # 连上先补一遍
                 for raw in r:
                     line = raw.decode("utf-8", "replace").rstrip("\r\n")
                     if line.startswith("event:"):
                         ev = line[6:].strip()
-                        if ev and ev != "ready":  # 来了条消息事件 → 扫一遍转发
-                            process_once(env, contacts, state, echo_names, client_holder)
+                        if ev and ev != "ready":
+                            with lock:
+                                process_once(env, contacts, state, echo_names, client_holder)
         except KeyboardInterrupt:
             raise
         except Exception as e:
