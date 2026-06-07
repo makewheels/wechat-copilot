@@ -96,37 +96,39 @@ def new_after(msgs, last_key):
     return [m for m in msgs if (m.get("createTime") or 0) > last_ct]
 
 
-def download_media(env, wxid, m):
-    """给一条图片消息，走 WeFlow media=1 导出并下载解密后的图片，
-    返回 base64 编码的字符串。失败返回 None。"""
+def download_media(env, wxid, local_id):
+    """给图片/语音的 localId，走 WeFlow media=1 导出并下载解密后的媒体，
+    返回 (媒体类型, base64编码数据)。失败返回 (None, None)。"""
     base = (env.get("WEFLOW_API") or "http://127.0.0.1:5031").rstrip("/")
     tok = urllib.parse.quote(env.get("WEFLOW_ACCESS_TOKEN", ""))
-    url = f"{base}/api/v1/messages?talker={wxid}&limit=1&offset={m.get('localId',0)-1}&media=1&image=1&access_token={tok}"
+    # 用足够大的 limit 拉最近消息，确保覆盖目标消息（WeFlow offset 语义不稳定）
+    url = f"{base}/api/v1/messages?talker={wxid}&limit={local_id + 5}&media=1&image=1&voice=1&access_token={tok}"
     try:
         with urllib.request.urlopen(url, timeout=30) as r:
             data = json.loads(r.read().decode("utf-8"))
     except Exception as e:
         print(f"    media 导出请求失败: {e}")
-        return None
+        return None, None
     for msg in data.get("messages", []):
-        media_url = msg.get("mediaUrl", "")
-        if media_url:
-            # url 里可能有特殊字符，替换部分为已编码
-            parsed = urllib.parse.urlparse(media_url)
-            dl = f"{base}{parsed.path}?access_token={tok}"
-            try:
-                with urllib.request.urlopen(dl, timeout=30) as r:
-                    return base64.b64encode(r.read()).decode()
-            except Exception as e:
-                print(f"    下载图片失败: {e}")
-                return None
-    return None
+        if msg.get("localId") == local_id:
+            media_url = msg.get("mediaUrl", "")
+            media_type = msg.get("mediaType", "")
+            if media_url:
+                parsed = urllib.parse.urlparse(media_url)
+                dl = f"{base}{parsed.path}?access_token={tok}"
+                try:
+                    with urllib.request.urlopen(dl, timeout=30) as r:
+                        return media_type, base64.b64encode(r.read()).decode()
+                except Exception as e:
+                    print(f"    下载媒体失败: {e}")
+                    return None, None
+    return None, None
 
 
 def push_image(env, wxid, m, client):
-    """把图片消息导出、下载、base64 编码后推送到服务器图片队列。"""
-    b64 = download_media(env, wxid, m)
-    if not b64:
+    """导出图片原图，base64 编码后推送到 Windows .img 队列。"""
+    mtype, b64 = download_media(env, wxid, m.get("localId"))
+    if not b64 or mtype not in ("image", None):
         return False
     name = f"{time.time_ns()}.img"
     ps = (
