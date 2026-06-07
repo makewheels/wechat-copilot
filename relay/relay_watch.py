@@ -187,7 +187,7 @@ def process_once(env, contacts, state, echo_names, client_holder):
 
 def parse_sse_revoke(data_line):
     """解析 SSE message.revoke 事件，返回格式化的撤回通知。
-    事件 content 已含原始内容，如：'对方撤回了一条消息（rawid：xxx） 内容为"你好"'"""
+    事件 content 格式：'对方撤回了一条消息（rawid：xxx） 内容为"你好"'"""
     try:
         evt = json.loads(data_line)
     except json.JSONDecodeError:
@@ -195,10 +195,12 @@ def parse_sse_revoke(data_line):
     if evt.get("event") != "message.revoke":
         return None
     content = (evt.get("content") or "").strip()
-    # 提取 "内容为"xxx"" 部分
-    m = re.search(r'内容为[「「](.+?)[」」]', content)
+    # 提取 "内容为"xxx"" 部分（支持中英文双引号和书名号）
+    m = re.search(r'内容为[""“”「」](.+?)[""“”「」]', content)
     original = m.group(1) if m else ""
-    src = (evt.get("sourceName") or "").strip()
+    src = (evt.get("sourceName") or evt.get("sessionId") or "").strip()
+    if not src:
+        return f"[撤回了一条消息{f'：{original}' if original else ''}]"
     if original:
         return f"[{src} 撤回了一条消息: {original}]"
     return f"[{src} 撤回了一条消息]"

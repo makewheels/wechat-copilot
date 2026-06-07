@@ -93,9 +93,9 @@ def send_one(text):
     return True
 
 
-def send_image(b64_data):
-    """把 base64 图片解码后放到剪贴板，然后 Ctrl+V 粘贴到微信。"""
-    import io, tempfile
+def send_image(raw_bytes):
+    """把图片二进制数据放到剪贴板，然后 Ctrl+V 粘贴到微信。"""
+    import io
     from PIL import Image
     import win32clipboard
 
@@ -106,9 +106,9 @@ def send_image(b64_data):
     if not focus(hwnd):
         time.sleep(0.5); focus(hwnd)
 
-    # 解码 base64 → PIL Image
+    # 二进制 → PIL Image
     try:
-        img = Image.open(io.BytesIO(base64.b64decode(b64_data)))
+        img = Image.open(io.BytesIO(raw_bytes))
     except Exception as e:
         log("图片解码失败", e)
         return False
@@ -152,7 +152,7 @@ def main():
                 if not raw:
                     log("SKIP 空", name)
                 elif ext == ".img":
-                    ok = send_image(raw.decode("ascii"))
+                    ok = send_image(raw)
                     log("SENT_IMG" if ok else "FAIL_IMG", name, f"{len(raw)} bytes")
                 else:
                     text = raw.decode("utf-8").rstrip("\n")
