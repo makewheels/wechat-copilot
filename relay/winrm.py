@@ -7,7 +7,22 @@
   winrm.py getfile R                       # print remote file R to stdout
 """
 import os, sys
+from pathlib import Path
+
 from pypsrp.client import Client
+
+
+def _load_env():
+    f = Path(__file__).resolve().parent / ".env"
+    if f.exists():
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
+_load_env()
 
 c = Client(os.environ.get("WINHOST", "127.0.0.1"),
            port=int(os.environ.get("WINPORT", "15985")),
