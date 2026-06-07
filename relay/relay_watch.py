@@ -228,11 +228,12 @@ def run_sse(env, contacts):
 
     state = load_state()
     echo_names = {v.get("name", k) for k, v in contacts.items()} | {"我"}
+    monitored_ids = set(contacts.keys())  # 只处理这些人的 SSE 事件
     client_holder = [None]
     lock = threading.Lock()
     init_state(env, contacts, state)
     names = [v.get("name", k) for k, v in contacts.items()]
-    print(f"SSE 订阅启动，盯：{names}。message.new/revoke 近实时 + {POLL}s 兜底。WeFlow docs: ~/workspace/tools/WeFlow/docs/HTTP-API.md")
+    print(f"SSE 订阅启动，盯：{names}。message.new/revoke 近实时 + {POLL}s 兜底。")
 
     def periodic():
         while True:
@@ -243,30 +244,44 @@ def run_sse(env, contacts):
     threading.Thread(target=periodic, daemon=True).start()
 
     while True:
+        last_event_id = ""
         try:
-            with urllib.request.urlopen(urllib.request.Request(sse_url(env)), timeout=70) as r:
+            req = urllib.request.Request(sse_url(env))
+            if last_event_id:
+                req.add_header("Last-Event-ID", last_event_id)
+            with urllib.request.urlopen(req, timeout=70) as r:
                 with lock:
                     process_once(env, contacts, state, echo_names, client_holder)
                 for raw in r:
                     line = raw.decode("utf-8", "replace").rstrip("\r\n")
-                    if line.startswith("event:") and line[6:].strip() == "message.revoke":
-                        # 下一行就是 data:，读它
-                        try:
-                            data_raw = next(r).decode("utf-8", "replace").rstrip("\r\n")
-                        except StopIteration:
-                            continue
-                        if data_raw.startswith("data:"):
-                            revoke_line = parse_sse_revoke(data_raw[5:].strip())
-                            if revoke_line:
-                                if client_holder[0] is None:
-                                    client_holder[0] = queue_push.make_client()
-                                with lock:
-                                    queue_push.push(revoke_line, client_holder[0])
-                                print(f"[{datetime.datetime.now():%H:%M:%S}] -> {revoke_line}")
+                    if line.startswith("id:"):
+                        last_event_id = line[3:].strip()
                         continue
-                    if line.startswith("event:") and line[6:].strip() not in ("ready", ""):
-                        with lock:
-                            process_once(env, contacts, state, echo_names, client_holder)
+                    if line.startswith("event:"):
+                        ev = line[6:].strip()
+                        if ev == "message.revoke":
+                            try:
+                                data_raw = next(r).decode("utf-8", "replace").rstrip("\r\n")
+                            except StopIteration:
+                                continue
+                            if data_raw.startswith("data:"):
+                                revoke_line = parse_sse_revoke(data_raw[5:].strip())
+                                if revoke_line:
+                                    # 解析看是不是盯的人在撤回
+                                    try:
+                                        evt = json.loads(data_raw[5:].strip())
+                                        sid = evt.get("sessionId", "")
+                                        # 只转发被盯的联系人的撤回
+                                        if sid in monitored_ids:
+                                            if client_holder[0] is None:
+                                                client_holder[0] = queue_push.make_client()
+                                            queue_push.push(revoke_line, client_holder[0])
+                                            print(f"[{datetime.datetime.now():%H:%M:%S}] -> {revoke_line}")
+                                    except Exception:
+                                        pass
+                        elif ev and ev != "ready":
+                            with lock:
+                                process_once(env, contacts, state, echo_names, client_holder)
         except KeyboardInterrupt:
             raise
         except Exception as e:
