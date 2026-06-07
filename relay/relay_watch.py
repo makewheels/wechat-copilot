@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
-"""Mac 端镜像监听器：盯 contacts.json 里的人，把双方新消息原样转发到
+"""Mac 端镜像监听器：盯 contacts.json 里的人，把双方新消息（含图片）原样转发到
 服务器队列 → 服务器粘进那个微信群。
 
-- 读：复用 copilot 的 weflow（WeFlow 本地只读 API，读本机微信库）
-- 发：queue_push.push()（WinRM 写服务器队列）
-- 双向：她发的(isSend=0) 和 我发的(isSend=1) 都转
-- 首次启动不补历史，只记当前最新位置
-- 文字消息转「名字: 内容」；非文字转占位符（[图片]/[语音]…）
-- 默认走 WeFlow 的 SSE 推送（/api/v1/push/messages），来一条转一条、近实时；
-  WeFlow 设置里需打开"消息推送"。失败/未开则可用 --poll 退回轮询。
+核心依赖 WeFlow HTTP API (https://github.com/hicccc77/WeFlow)：
+- SSE /api/v1/push/messages — message.new / message.revoke 事件近实时推送
+- /api/v1/messages?media=1&image=1 — 导出解密后的图片等媒体
+- /api/v1/media/<path> — 下载已导出的媒体文件
+
+WeFlow 设置需开启「HTTP API 服务」+「主动推送」。
+WeFlow 源码：~/workspace/tools/WeFlow/
+API 文档：~/workspace/tools/WeFlow/docs/HTTP-API.md
 
 用法：
   python relay_watch.py            SSE 订阅（默认，近实时）
-  python relay_watch.py --poll     轮询模式（每 POLL 秒）
+  python relay_watch.py --poll     轮询模式（每 4s，兼容无推送的情况）
   python relay_watch.py --send X   往队列推一条测试消息 X
 """
+import base64
 import datetime
 import json
+import os
+import re
 import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -25,14 +30,14 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-sys.path.insert(0, str(ROOT))  # 复用 copilot 根目录的 core / weflow
+sys.path.insert(0, str(ROOT))
 
 import core
 import weflow
 import queue_push
 
 STATE = HERE / "relay_state.json"
-POLL = 4  # 秒（--poll 模式的轮询间隔）
+POLL = 4  # 秒（--poll 模式的轮询间隔 / SSE 模式的定时兜底）
 
 
 def load_contacts():
@@ -52,27 +57,16 @@ def msg_key(m):
     return f"{m.get('createTime')}:{m.get('localId')}"
 
 
-# 撤回还原缓存：记下最近 N 条已转发的文字消息（isSend + 内容），
-# 撤回事件来的时候匹配回去，显示 "xx 撤回了一条消息: 原内容"
-RECALL_CACHE = {}  # { (会话wxid, isSend): 最后一条文字内容 }
-
-
 def fmt(name, m):
     who = "我" if m.get("isSend") else name
     lt = m.get("localType")
     content = (m.get("content") or "").strip()
 
-    # 撤回检测：localType=10000 且含 revokemsg 的 XML
     if lt == 10000 and "<revokemsg>" in content:
         who_str = "你" if m.get("isSend") else name
-        cache_key = (str(m.get('senderUsername') or ''), m.get('isSend'))
-        cached = RECALL_CACHE.pop(cache_key, "")
-        if cached:
-            return f"[{who_str} 撤回了一条消息: {cached}]"
         return f"[{who_str} 撤回了一条消息]"
 
-    # 语音：WeFlow 开了自动转文字后 content 就是识别结果
-    if lt == 34:
+    if lt == 34:  # 语音
         if content:
             return f"{who}: [语音] {content}"
         return f"{who}: [语音]"
@@ -84,8 +78,7 @@ def fmt(name, m):
 
 
 def is_echo(m, names):
-    """防回环：转发出去的消息形如「名字: 内容」，若它又被读回来（比如发错成了
-    被监听的私聊），跳过，避免无限套娃。"""
+    """防回环：转发出去的消息形如「名字: 内容」，若它又被读回来则跳过。"""
     if m.get("localType") != 1:
         return False
     txt = (m.get("content") or "").strip()
@@ -99,12 +92,53 @@ def new_after(msgs, last_key):
     keys = [msg_key(m) for m in msgs]
     if last_key in keys:
         return msgs[keys.index(last_key) + 1:]
-    last_ct = int(last_key.split(":")[0])  # last_key 滑出窗口：按时间兜底
+    last_ct = int(last_key.split(":")[0])
     return [m for m in msgs if (m.get("createTime") or 0) > last_ct]
 
 
+def download_media(env, wxid, m):
+    """给一条图片消息，走 WeFlow media=1 导出并下载解密后的图片，
+    返回 base64 编码的字符串。失败返回 None。"""
+    base = (env.get("WEFLOW_API") or "http://127.0.0.1:5031").rstrip("/")
+    tok = urllib.parse.quote(env.get("WEFLOW_ACCESS_TOKEN", ""))
+    url = f"{base}/api/v1/messages?talker={wxid}&limit=1&offset={m.get('localId',0)-1}&media=1&image=1&access_token={tok}"
+    try:
+        with urllib.request.urlopen(url, timeout=30) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        print(f"    media 导出请求失败: {e}")
+        return None
+    for msg in data.get("messages", []):
+        media_url = msg.get("mediaUrl", "")
+        if media_url:
+            # url 里可能有特殊字符，替换部分为已编码
+            parsed = urllib.parse.urlparse(media_url)
+            dl = f"{base}{parsed.path}?access_token={tok}"
+            try:
+                with urllib.request.urlopen(dl, timeout=30) as r:
+                    return base64.b64encode(r.read()).decode()
+            except Exception as e:
+                print(f"    下载图片失败: {e}")
+                return None
+    return None
+
+
+def push_image(env, wxid, m, client):
+    """把图片消息导出、下载、base64 编码后推送到服务器图片队列。"""
+    b64 = download_media(env, wxid, m)
+    if not b64:
+        return False
+    name = f"{time.time_ns()}.img"
+    ps = (
+        f"$b=[Convert]::FromBase64String('{b64}');"
+        f"[IO.File]::WriteAllBytes('C:\\relay\\queue\\{name}',$b);'{name}'"
+    )
+    out, streams, had_err = client.execute_ps(ps)
+    return not had_err
+
+
 def process_once(env, contacts, state, echo_names, client_holder):
-    """扫一遍所有盯的人，把新消息转出去。被 SSE 事件和轮询共用。"""
+    """扫一遍所有盯的人，把新消息（文字+图片）转发出去。"""
     changed = False
     for wxid, info in contacts.items():
         name = info.get("name", wxid)
@@ -112,7 +146,7 @@ def process_once(env, contacts, state, echo_names, client_holder):
             msgs = weflow.messages(env, wxid, 40)
             if not msgs:
                 continue
-            if wxid not in state:  # 首次：只记位置，不补历史
+            if wxid not in state:
                 state[wxid] = msg_key(msgs[-1]); changed = True
                 continue
             fresh = new_after(msgs, state.get(wxid))
@@ -121,27 +155,54 @@ def process_once(env, contacts, state, echo_names, client_holder):
             if client_holder[0] is None:
                 client_holder[0] = queue_push.make_client()
             for m in fresh:
-                line = fmt(name, m)
-                if not line:
-                    continue
-                if is_echo(m, echo_names):  # 防回环
-                    print(f"[{datetime.datetime.now():%H:%M:%S}] 跳过回声 {line[:40]}")
-                    continue
-                queue_push.push(line, client_holder[0])
-                print(f"[{datetime.datetime.now():%H:%M:%S}] -> {line[:60]}")
-                # 撤回还原：缓存最近的文字消息
-                if m.get('localType') == 1:
-                    RECALL_CACHE[(wxid, m.get('isSend'))] = (m.get('content') or '').strip()[:80]
+                lt = m.get("localType")
+                # 图片：导出解密后 base64 传到 Windows
+                if lt == 3:
+                    ok = push_image(env, wxid, m, client_holder[0])
+                    who = "我" if m.get("isSend") else name
+                    if ok:
+                        queue_push.push(f"{who}: [图片]", client_holder[0])
+                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> {who}: [图片] (已传原图)")
+                    else:
+                        queue_push.push(f"{who}: [图片]", client_holder[0])
+                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> {who}: [图片] (原图获取失败)")
+                else:
+                    line = fmt(name, m)
+                    if not line:
+                        continue
+                    if is_echo(m, echo_names):
+                        print(f"[{datetime.datetime.now():%H:%M:%S}] 跳过回声 {line[:40]}")
+                        continue
+                    queue_push.push(line, client_holder[0])
+                    print(f"[{datetime.datetime.now():%H:%M:%S}] -> {line[:60]}")
             state[wxid] = msg_key(msgs[-1]); changed = True
         except Exception as e:
             print(f"[err] {name}: {e}")
-            client_holder[0] = None  # 下次重连
+            client_holder[0] = None
     if changed:
         save_state(state)
 
 
+def parse_sse_revoke(data_line):
+    """解析 SSE message.revoke 事件，返回格式化的撤回通知。
+    事件 content 已含原始内容，如：'对方撤回了一条消息（rawid：xxx） 内容为"你好"'"""
+    try:
+        evt = json.loads(data_line)
+    except json.JSONDecodeError:
+        return None
+    if evt.get("event") != "message.revoke":
+        return None
+    content = (evt.get("content") or "").strip()
+    # 提取 "内容为"xxx"" 部分
+    m = re.search(r'内容为[「「](.+?)[」」]', content)
+    original = m.group(1) if m else ""
+    src = (evt.get("sourceName") or "").strip()
+    if original:
+        return f"[{src} 撤回了一条消息: {original}]"
+    return f"[{src} 撤回了一条消息]"
+
+
 def init_state(env, contacts, state):
-    """首次启动：给没记录过的人记下当前最新位置（不补历史）。"""
     for wxid in contacts:
         if wxid not in state:
             ms = weflow.messages(env, wxid, 10)
@@ -165,11 +226,9 @@ def run_sse(env, contacts):
     lock = threading.Lock()
     init_state(env, contacts, state)
     names = [v.get("name", k) for k, v in contacts.items()]
-    print(f"SSE 订阅启动，盯：{names}。SSE 收消息近实时 + {POLL}s 定时兜底发消息。Ctrl+C 停。")
+    print(f"SSE 订阅启动，盯：{names}。message.new/revoke 近实时 + {POLL}s 兜底。WeFlow docs: ~/workspace/tools/WeFlow/docs/HTTP-API.md")
 
     def periodic():
-        """定时兜底：WeFlow SSE 只推 incoming (isSend=0)，不推自己发的 (isSend=1)。
-        所以每 POLL 秒扫一遍，补上 outgoing 的。"""
         while True:
             time.sleep(POLL)
             with lock:
@@ -181,14 +240,27 @@ def run_sse(env, contacts):
         try:
             with urllib.request.urlopen(urllib.request.Request(sse_url(env)), timeout=70) as r:
                 with lock:
-                    process_once(env, contacts, state, echo_names, client_holder)  # 连上先补一遍
+                    process_once(env, contacts, state, echo_names, client_holder)
                 for raw in r:
                     line = raw.decode("utf-8", "replace").rstrip("\r\n")
-                    if line.startswith("event:"):
-                        ev = line[6:].strip()
-                        if ev and ev != "ready":
-                            with lock:
-                                process_once(env, contacts, state, echo_names, client_holder)
+                    if line.startswith("event:") and line[6:].strip() == "message.revoke":
+                        # 下一行就是 data:，读它
+                        try:
+                            data_raw = next(r).decode("utf-8", "replace").rstrip("\r\n")
+                        except StopIteration:
+                            continue
+                        if data_raw.startswith("data:"):
+                            revoke_line = parse_sse_revoke(data_raw[5:].strip())
+                            if revoke_line:
+                                if client_holder[0] is None:
+                                    client_holder[0] = queue_push.make_client()
+                                with lock:
+                                    queue_push.push(revoke_line, client_holder[0])
+                                print(f"[{datetime.datetime.now():%H:%M:%S}] -> {revoke_line}")
+                        continue
+                    if line.startswith("event:") and line[6:].strip() not in ("ready", ""):
+                        with lock:
+                            process_once(env, contacts, state, echo_names, client_holder)
         except KeyboardInterrupt:
             raise
         except Exception as e:
@@ -202,7 +274,7 @@ def run_poll(env, contacts):
     client_holder = [None]
     init_state(env, contacts, state)
     names = [v.get("name", k) for k, v in contacts.items()]
-    print(f"轮询监听启动，盯：{names}，每 {POLL}s 一次。Ctrl+C 停。")
+    print(f"轮询监听启动，盯：{names}，每 {POLL}s 一次。")
     while True:
         process_once(env, contacts, state, echo_names, client_holder)
         time.sleep(POLL)
