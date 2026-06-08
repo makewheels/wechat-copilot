@@ -33,12 +33,19 @@ ADVICE = HERE / "data" / "advice.txt"
 import re
 
 
-def try_wechat_push(text: str, markdown: bool = False):
+def try_wechat_push(text: str, markdown: bool = False, relay_too: bool = True):
     try:
         from feishu_push import push   # 飞书群
         logging.info(f"feishu push: {push(text, markdown=markdown)}")
     except Exception as e:
         logging.info(f"feishu push skip: {e}")
+    # 同步推送到微信（relay → Windows 企业微信当前会话）
+    if relay_too:
+        try:
+            from relay import queue_push
+            queue_push.push(text)
+        except Exception:
+            pass
 
 
 CHAT_STATE = HERE / "data" / "chat_state.json"
@@ -48,17 +55,18 @@ def set_current(name: str, wxid: str):
     CHAT_STATE.write_text(json.dumps({"name": name, "wxid": wxid}, ensure_ascii=False))
 
 
-def deliver(name: str, text: str, wxid: str = ""):
+def deliver(name: str, text: str, wxid: str = "", push_fs: bool = True):
     if wxid:
         set_current(name, wxid)   # 记下当前在聊谁，双向问答默认指这人
     ts = datetime.datetime.now().strftime("%H:%M")
     with ADVICE.open("a", encoding="utf-8") as f:   # 存文件兜底
         f.write(f"\n{'━' * 42}\n🕐 {ts}  【{name}】\n{'━' * 42}\n{text}\n")
 
-    # 只给一条建议：取第一非空行，去掉可能的序号/标签/引号
-    line = next((l for l in text.splitlines() if l.strip()), text).strip()
-    d = re.sub(r'^\s*[\d①-⑩\-\*•.、)）]+\s*', '', line).strip().strip('“”"')
-    try_wechat_push(d or text.strip())
+    if push_fs:
+        # 只给一条建议：取第一非空行，去掉可能的序号/标签/引号
+        line = next((l for l in text.splitlines() if l.strip()), text).strip()
+        d = re.sub(r'^\s*[\d①-⑩\-\*•.、)）]+\s*', '', line).strip().strip('"""')
+        try_wechat_push(d or text.strip(), relay_too=False)
 
 # 要盯的对象：读 data/contacts.json
 def load_contacts():
@@ -133,10 +141,22 @@ def main():
                 logging.info(f"{name} 有新回复 key={key}，出建议…")
                 print(f"[{datetime.datetime.now():%H:%M:%S}] {name} 有新回复，出建议…")
                 last_text = (last.get("content") or "")[:30] if last.get("localType") == 1 else "[非文字]"
-                try_wechat_push(f"⏳【{name}】收到「{last_text}」，军师思考中…")
+                try_wechat_push(f"⏳【{name}】收到「{last_text}」，军师思考中…", relay_too=False)
                 adv = advise(env, name, profile, msgs)
                 logging.info(f"{name} 建议长度={len(adv)}")
-                deliver(name, adv, wxid)
+                now = datetime.datetime.now().strftime("%H:%M")
+                quote = last_text[:8] + ("…" if len(last_text) > 8 else "")
+                header = f"【回复建议】{name} {now} ·「{quote}」"
+                # 飞书（只发飞书，不推 relay）
+                try_wechat_push(f"{header}\n{adv}", relay_too=False)
+                # 微信 relay
+                try:
+                    from relay import queue_push
+                    queue_push.push(f"{header}\n{adv}")
+                except Exception:
+                    pass
+                # 写本地日志（不再推飞书，避免重复）
+                deliver(name, adv, wxid, push_fs=False)
                 logging.info(f"{name} 已投递")
                 state[wxid] = key
                 save_state(state)
