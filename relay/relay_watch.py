@@ -55,6 +55,25 @@ _recog = None  # 懒加载，避免启动就占模型内存
 _last_notify = {}  # 通知去重：key -> 上次通知时间戳
 
 
+def _on_signal(signum, frame):
+    import traceback as _tb
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    msg = f"{ts} SIGNAL {signum}\n{''.join(_tb.format_stack(frame))}"
+    print(msg)
+    try:
+        with open(HERE / "relay_watch.log", "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+    except Exception:
+        pass
+    import os as _os
+    _os._exit(128 + signum)
+
+
+import signal
+signal.signal(signal.SIGHUP, _on_signal)
+signal.signal(signal.SIGTERM, _on_signal)
+
+
 def notify(key, text, cooldown=300):
     """弹一条 macOS 通知（同 key 在 cooldown 秒内只弹一次）。真正弹了返回 True。"""
     now = time.time()
@@ -434,11 +453,18 @@ def parse_sse_revoke(data_line):
 
 
 def init_state(env, contacts, state):
-    for wxid in contacts:
+    for wxid, info in contacts.items():
+        ms = weflow.messages(env, wxid, 40)
+        if not ms:
+            continue
+        name = info.get("name", wxid)
         if wxid not in state:
-            ms = weflow.messages(env, wxid, 10)
-            if ms:
-                state[wxid] = msg_key(ms[-1])
+            state[wxid] = msg_key(ms[-1])
+            continue
+        # 检查上次转发后来了多少新消息
+        fresh = new_after(ms, state.get(wxid))
+        if fresh:
+            print(f"[启动] {name} 有 {len(fresh)} 条新消息待转发")
     save_state(state)
 
 
@@ -465,8 +491,13 @@ def run_sse(env, contacts):
     def periodic():
         while True:
             time.sleep(POLL)
-            with lock:
-                process_once(env, contacts, state, echo_names, client_holder, pending)
+            try:
+                with lock:
+                    process_once(env, contacts, state, echo_names, client_holder, pending)
+            except Exception:
+                import traceback
+                ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                print(f"{ts} [periodic] {traceback.format_exc()}")
 
     threading.Thread(target=periodic, daemon=True).start()
 
@@ -530,23 +561,41 @@ def run_poll(env, contacts):
     names = [v.get("name", k) for k, v in contacts.items()]
     print(f"轮询监听启动，盯：{names}，每 {POLL}s 一次。")
     while True:
-        process_once(env, contacts, state, echo_names, client_holder, pending)
+        try:
+            process_once(env, contacts, state, echo_names, client_holder, pending)
+        except Exception:
+            import traceback
+            ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"{ts} [poll] {traceback.format_exc()}")
         time.sleep(POLL)
 
 
 def main():
-    env = core.load_env()
-    contacts = load_contacts()
+    try:
+        env = core.load_env()
+        contacts = load_contacts()
 
-    if "--send" in sys.argv:
-        text = sys.argv[sys.argv.index("--send") + 1]
-        print("入队:", queue_push.push(text))
-        return
+        if "--send" in sys.argv:
+            text = sys.argv[sys.argv.index("--send") + 1]
+            print("入队:", queue_push.push(text))
+            return
 
-    if "--poll" in sys.argv:
-        run_poll(env, contacts)
-    else:
-        run_sse(env, contacts)
+        if "--poll" in sys.argv:
+            run_poll(env, contacts)
+        else:
+            run_sse(env, contacts)
+    except Exception:
+        import traceback
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        msg = f"{ts} FATAL\n{traceback.format_exc()}"
+        print(msg)
+        # 写进日志文件
+        try:
+            with open(HERE / "relay_watch.log", "a", encoding="utf-8") as f:
+                f.write(msg + "\n")
+        except Exception:
+            pass
+        sys.exit(1)
 
 
 if __name__ == "__main__":

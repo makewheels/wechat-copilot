@@ -147,15 +147,9 @@ def main():
                 now = datetime.datetime.now().strftime("%H:%M")
                 quote = last_text[:8] + ("…" if len(last_text) > 8 else "")
                 header = f"【回复建议】{name} {now} ·「{quote}」"
-                # 飞书（只发飞书，不推 relay）
+                # 只发飞书，不推微信 relay
                 try_wechat_push(f"{header}\n{adv}", relay_too=False)
-                # 微信 relay
-                try:
-                    from relay import queue_push
-                    queue_push.push(f"{header}\n{adv}")
-                except Exception:
-                    pass
-                # 写本地日志（不再推飞书，避免重复）
+                # 写本地日志
                 deliver(name, adv, wxid, push_fs=False)
                 logging.info(f"{name} 已投递")
                 state[wxid] = key

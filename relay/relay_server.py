@@ -65,12 +65,18 @@ def main():
                     log("SENT img", name, f"{len(raw)}b")
                 else:
                     text = raw.decode("utf-8").rstrip("\n")
-                    pyperclip.copy(text)
-                    time.sleep(0.1)
-                    pyautogui.hotkey("ctrl", "v")
+                    # 确保剪贴板有内容
+                    for _ in range(3):
+                        pyperclip.copy(text)
+                        time.sleep(0.2)
+                        if pyperclip.paste() == text:
+                            break
+                        log("clipboard retry", name)
                     time.sleep(0.3)
+                    pyautogui.hotkey("ctrl", "v")
+                    time.sleep(0.5)
                     pyautogui.press("enter")
-                    time.sleep(0.2)
+                    time.sleep(1.5)  # 等发完
                     log("SENT", name, repr(text[:80]))
                 try:
                     shutil.move(fp, os.path.join(DONE, name))
@@ -79,10 +85,10 @@ def main():
                         os.remove(fp)
                     except Exception:
                         pass
-                time.sleep(0.3)
+                time.sleep(0.5)
         except Exception:
             log("LOOP\n" + traceback.format_exc())
-        time.sleep(1.0)
+        time.sleep(1.5)
 
 
 if __name__ == "__main__":

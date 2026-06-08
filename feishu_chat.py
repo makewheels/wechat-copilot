@@ -23,15 +23,6 @@ import core
 import weflow
 import feishu_push
 
-# 军师建议同步到微信（走 relay 管道 → Windows 企业微信）
-RELAY = HERE / "relay"
-if str(RELAY) not in sys.path:
-    sys.path.insert(0, str(RELAY))
-try:
-    import queue_push as _qp
-except Exception:
-    _qp = None
-
 HERE = Path(__file__).resolve().parent
 CHAT_STATE = HERE / "data" / "chat_state.json"
 CONTACTS = HERE / "data" / "contacts.json"
@@ -79,12 +70,6 @@ def answer(env, question: str, chat_id: str):
     user = core.build_chat_user(name, profile_of(wxid), trans, question)
     reply = core.call_qwen(env, core.build_system(), user)
     feishu_push.push(reply, markdown=True, chat_id=chat_id)
-    # 同步发到微信（relay → Windows 企业微信当前会话）
-    if _qp:
-        try:
-            _qp.push(reply)
-        except Exception:
-            pass
     logging.info(f"已回答（对象={name}）：{question[:30]} -> {len(reply)}字")
 
 
