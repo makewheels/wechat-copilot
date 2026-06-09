@@ -100,6 +100,15 @@ def save_pending(p):
     PENDING.write_text(json.dumps(p, ensure_ascii=False, indent=2))
 
 
+def ts_str(ts):
+    """时间格式：同日 HH:MM:SS，跨日 MM-DD HH:MM:SS。"""
+    if not ts:
+        return ""
+    dt = datetime.datetime.fromtimestamp(ts)
+    fmt = "%H:%M:%S" if dt.date() == datetime.date.today() else "%m-%d %H:%M:%S"
+    return dt.strftime(fmt)
+
+
 def msg_key(m):
     return f"{m.get('createTime')}:{m.get('localId')}"
 
@@ -108,20 +117,21 @@ def fmt(name, m):
     who = "我" if m.get("isSend") else name
     lt = m.get("localType")
     content = (m.get("content") or "").strip()
+    t = ts_str(m.get("createTime"))
 
     if lt == 10000 and "<revokemsg>" in content:
         who_str = "你" if m.get("isSend") else name
-        return f"[{who_str} 撤回了一条消息]"
+        return f"{t} [{who_str} 撤回了一条消息]"
 
     if lt == 34:  # 语音
         if content:
-            return f"{who}: [语音] {content}"
-        return f"{who}: [语音]"
+            return f"{t} {who}: [语音] {content}"
+        return f"{t} {who}: [语音]"
 
     txt = content if lt == 1 else (weflow.TAG.get(lt) or "[其他]")
     if not txt:
         return None
-    return f"{who}: {txt}"
+    return f"{t} {who}: {txt}"
 
 
 def is_echo(m, names):
@@ -267,9 +277,10 @@ def process_once(env, contacts, state, echo_names, client_holder, pending):
             for m in fresh:
                 lt = m.get("localType")
                 who = "我" if m.get("isSend") else name
+                t = ts_str(m.get("createTime"))
                 # 图片：先发文字前缀，再传原图（两条消息）
                 if lt == 3:
-                    prefix = f"{who} 发了图片"
+                    prefix = f"{t} {who} 发了图片"
                     queue_push.push(prefix, client_holder[0])
                     ok = push_media(env, wxid, m, client_holder[0], prefix)
                     if ok:
@@ -293,7 +304,7 @@ def process_once(env, contacts, state, echo_names, client_holder, pending):
                         wav_bytes = base64.b64decode(wav_b64)
                         text = transcribe_wav(wav_bytes) or ""
                     suffix = f": {text}" if text else ""
-                    prefix = f"{who} 发了语音{dur}{suffix}"
+                    prefix = f"{t} {who} 发了语音{dur}{suffix}"
                     queue_push.push(prefix, client_holder[0])
                     print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix}")
                 else:
