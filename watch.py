@@ -147,8 +147,8 @@ def main():
                 now = datetime.datetime.now().strftime("%H:%M")
                 quote = last_text[:8] + ("…" if len(last_text) > 8 else "")
                 header = f"【回复建议】{name} {now} ·「{quote}」"
-                # 只发飞书，不推微信 relay
-                try_wechat_push(f"{header}\n{adv}", relay_too=False)
+                # 飞书 + 微信 relay 一起发
+                try_wechat_push(f"{header}\n{adv}", relay_too=True)
                 # 写本地日志
                 deliver(name, adv, wxid, push_fs=False)
                 logging.info(f"{name} 已投递")

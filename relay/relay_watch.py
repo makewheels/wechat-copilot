@@ -11,12 +11,6 @@ WeFlow 设置需开启「HTTP API 服务」+「主动推送」。
 WeFlow 源码：~/workspace/tools/WeFlow/
 API 文档：~/workspace/tools/WeFlow/docs/HTTP-API.md
 
-可靠性（防丢消息 / 断链自愈）：
-- 每条转发消息末尾换行附「收到时间」，积压补发时能看出先后。
-- 发送失败的消息持久化到 relay_pending.json，每轮按顺序重试，不丢、不乱序。
-- 连不上服务器（WinRM 隧道断，端口 15985 拒连）→ 弹 macOS 通知 +
-  自动重拉 tunnel.sh（launchd 只保 relay_watch，隧道由 relay_watch 自己保活）。
-
 用法：
   python relay_watch.py            SSE 订阅（默认，近实时）
   python relay_watch.py --poll     轮询模式（每 4s，兼容无推送的情况）
@@ -29,7 +23,6 @@ import json
 import os
 import re
 import struct
-import subprocess
 import sys
 import tempfile
 import time
@@ -47,71 +40,11 @@ import weflow
 import queue_push
 
 STATE = HERE / "relay_state.json"
-PENDING = HERE / "relay_pending.json"  # 失败的消息（文本/图片），持久化、周期性重试
+PENDING = HERE / "relay_pending.json"  # 失败的图片，周期性重试
 POLL = 4  # 秒
 MAX_RETRIES = 30  # 图片下载最多重试 30 次（~2 分钟）
 TRANSCRIBE_MODEL_DIR = os.path.expanduser("~/Documents/WeFlow/models/sensevoice")
 _recog = None  # 懒加载，避免启动就占模型内存
-_last_notify = {}  # 通知去重：key -> 上次通知时间戳
-
-
-def _on_signal(signum, frame):
-    import traceback as _tb
-    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    msg = f"{ts} SIGNAL {signum}\n{''.join(_tb.format_stack(frame))}"
-    print(msg)
-    try:
-        with open(HERE / "relay_watch.log", "a", encoding="utf-8") as f:
-            f.write(msg + "\n")
-    except Exception:
-        pass
-    import os as _os
-    _os._exit(128 + signum)
-
-
-import signal
-signal.signal(signal.SIGHUP, _on_signal)
-signal.signal(signal.SIGTERM, _on_signal)
-
-
-def notify(key, text, cooldown=300):
-    """弹一条 macOS 通知（同 key 在 cooldown 秒内只弹一次）。真正弹了返回 True。"""
-    now = time.time()
-    if now - _last_notify.get(key, 0) < cooldown:
-        return False
-    _last_notify[key] = now
-    print(f"[{datetime.datetime.now():%H:%M:%S}] ⚠ {text}")
-    try:
-        safe = text.replace('"', "'")
-        subprocess.run(
-            ["osascript", "-e", f'display notification "{safe}" with title "微信转发"'],
-            timeout=10, capture_output=True)
-    except Exception:
-        pass
-    return True
-
-
-def ensure_tunnel():
-    """确保 WinRM 隧道在（连不上时重拉，tunnel.sh 自身幂等：已在则秒退）。"""
-    try:
-        subprocess.run(["bash", str(HERE / "tunnel.sh")], timeout=45, capture_output=True)
-    except Exception:
-        pass
-
-
-def on_disconnect():
-    """判定为断链：弹通知 + 自动重拉隧道。通知有 60s 冷却，一轮多条只重连一次。"""
-    if notify("conn", "连不上服务器(隧道断)，消息已本地暂存，正在重连隧道…", cooldown=60):
-        ensure_tunnel()
-
-
-def ts_str(ts):
-    """时间格式：同日 HH:MM，跨日 MM-DD HH:MM。"""
-    if not ts:
-        return ""
-    dt = datetime.datetime.fromtimestamp(ts)
-    fmt = "%H:%M" if dt.date() == datetime.date.today() else "%m-%d %H:%M"
-    return dt.strftime(fmt)
 
 
 def _get_recognizer():
@@ -172,7 +105,7 @@ def msg_key(m):
 
 
 def fmt(name, m):
-    """返回纯内容（不含发送者名），调用方拼「名字 时间\\n内容」。"""
+    who = "我" if m.get("isSend") else name
     lt = m.get("localType")
     content = (m.get("content") or "").strip()
 
@@ -182,13 +115,13 @@ def fmt(name, m):
 
     if lt == 34:  # 语音
         if content:
-            return f"[语音] {content}"
-        return "[语音]"
+            return f"{who}: [语音] {content}"
+        return f"{who}: [语音]"
 
     txt = content if lt == 1 else (weflow.TAG.get(lt) or "[其他]")
     if not txt:
         return None
-    return txt
+    return f"{who}: {txt}"
 
 
 def is_echo(m, names):
@@ -262,98 +195,60 @@ def download_media(env, wxid, local_id):
     return None, None
 
 
-def try_push_text(text, client_holder, retries=3):
-    """发一条文本到服务器队列。失败立即重试（隧道闪断常见），都失败才返回 False。"""
-    for i in range(retries):
-        try:
-            if client_holder[0] is None:
-                client_holder[0] = queue_push.make_client()
-            queue_push.push(text, client_holder[0])
-            return True
-        except Exception:
-            client_holder[0] = None
-            if i < retries - 1:
-                time.sleep(1)
-                ensure_tunnel()
-    return False
-
-
-def _push_img(b64, client_holder, retries=3):
-    """把 base64 图片写进服务器 .img 队列。失败立即重试。"""
-    for i in range(retries):
-        try:
-            if client_holder[0] is None:
-                client_holder[0] = queue_push.make_client()
-            name = f"{time.time_ns()}.img"
-            ps = (
-                f"$b=[Convert]::FromBase64String('{b64}');"
-                f"[IO.File]::WriteAllBytes('C:\\relay\\queue\\{name}',$b);'{name}'"
-            )
-            _, _, had_err = client_holder[0].execute_ps(ps)
-            if not had_err:
-                return True
-        except Exception:
-            client_holder[0] = None
-            if i < retries - 1:
-                time.sleep(1)
-                ensure_tunnel()
-    return False
-
-
-def _push_media(env, wxid, m, client_holder):
-    """导出图片原图并推送到服务器 .img 队列。成功 True，否则 False。"""
+def push_media(env, wxid, m, client, prefix):
+    """导出图片原图，base64 后推送到 Windows .img 队列。前缀文字单独发。"""
     mtype, b64 = download_media(env, wxid, m.get("localId"))
     if not b64:
         return False
-    return _push_img(b64, client_holder)
-
-
-def _enqueue_text(pending, wxid, m, text):
-    pending[f"{wxid}:{m.get('localId')}"] = {
-        "kind": "text", "text": text, "ts": m.get("createTime"), "retries": 0}
-
-
-def retry_pending(env, pending, client_holder):
-    """补发本地积压的失败消息（文本/图片）。按插入顺序发，突发连不上则整体留到下轮。
-    返回是否改动了 pending。"""
-    modified = False
-    for key in list(pending.keys()):
-        e = pending[key]
-        kind = e.get("kind", "image")
-        if kind == "text":
-            if try_push_text(e["text"], client_holder):
-                head = e["text"].splitlines()[0]
-                print(f"[{datetime.datetime.now():%H:%M:%S}] -> 补发成功 {head[:40]}")
-                del pending[key]
-                modified = True
-            else:
-                on_disconnect()
-                break  # 连不上，保留顺序与全部消息，下轮再来
-        else:  # image
-            if e.get("retries", 0) >= MAX_RETRIES:
-                print(f"[{datetime.datetime.now():%H:%M:%S}] 放弃重试 {key}")
-                del pending[key]
-                modified = True
-                continue
-            mtype, b64 = download_media(env, e["wxid"], e["local_id"])
-            if not b64:
-                e["retries"] = e.get("retries", 0) + 1  # 媒体还没导出好，下次再下
-                modified = True
-                continue
-            if _push_img(b64, client_holder):
-                print(f"[{datetime.datetime.now():%H:%M:%S}] -> 图片补发成功")
-                del pending[key]
-                modified = True
-            else:
-                on_disconnect()
-                break
-    return modified
+    name = f"{time.time_ns()}.img"
+    ps = (
+        f"$b=[Convert]::FromBase64String('{b64}');"
+        f"[IO.File]::WriteAllBytes('C:\\relay\\queue\\{name}',$b);'{name}'"
+    )
+    out, streams, had_err = client.execute_ps(ps)
+    return not had_err
 
 
 def process_once(env, contacts, state, echo_names, client_holder, pending):
-    """扫一遍所有盯的人，把新消息（文字+图片）转发出去；失败的本地记录并重试。"""
+    """扫一遍所有盯的人，把新消息（文字+图片）转发出去。"""
     changed = False
-    pending_modified = retry_pending(env, pending, client_holder)
+    pending_modified = False
+
+    # 先重试失败的图片
+    if pending and client_holder[0] is not None:
+        retry_keys = list(pending.keys())
+        for key in retry_keys:
+            entry = pending[key]
+            if entry.get("retries", 0) >= MAX_RETRIES:
+                print(f"[{datetime.datetime.now():%H:%M:%S}] 放弃重试 {key}")
+                del pending[key]
+                pending_modified = True
+                continue
+            wxid, local_id_str = key.split(":", 1)
+            local_id = int(local_id_str)
+            mtype, b64 = download_media(env, wxid, local_id)
+            if b64:
+                name = contacts.get(wxid, {}).get("name", wxid)
+                who = "我" if entry.get("isSend") else name
+                prefix = f"{who} 发了图片"
+                name_f = f"{time.time_ns()}.img"
+                ps = (
+                    f"$b=[Convert]::FromBase64String('{b64}');"
+                    f"[IO.File]::WriteAllBytes('C:\\relay\\queue\\{name_f}',$b);'{name_f}'"
+                )
+                _, _, had_err = client_holder[0].execute_ps(ps)
+                if not had_err:
+                    print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix} (重试成功)")
+                    del pending[key]
+                    pending_modified = True
+                else:
+                    entry["retries"] = entry.get("retries", 0) + 1
+                    pending_modified = True
+            else:
+                entry["retries"] = entry.get("retries", 0) + 1
+                pending_modified = True
+        if pending_modified and not pending:
+            save_pending(pending)
 
     for wxid, info in contacts.items():
         name = info.get("name", wxid)
@@ -367,45 +262,40 @@ def process_once(env, contacts, state, echo_names, client_holder, pending):
             fresh = new_after(msgs, state.get(wxid))
             if not fresh:
                 continue
+            if client_holder[0] is None:
+                client_holder[0] = queue_push.make_client()
             for m in fresh:
                 lt = m.get("localType")
                 who = "我" if m.get("isSend") else name
-                time_str = ts_str(m.get("createTime"))
-                header = f"【消息】{who} {time_str}"
-                if lt == 3:  # 图片
-                    prefix = f"{header}\n发了图片"
-                    if not try_push_text(prefix, client_holder):
-                        _enqueue_text(pending, wxid, m, prefix)
-                        pending_modified = True
-                        on_disconnect()
-                    if _push_media(env, wxid, m, client_holder):
-                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> {who} 发了图片 (已传原图)")
+                # 图片：先发文字前缀，再传原图（两条消息）
+                if lt == 3:
+                    prefix = f"{who} 发了图片"
+                    queue_push.push(prefix, client_holder[0])
+                    ok = push_media(env, wxid, m, client_holder[0], prefix)
+                    if ok:
+                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix} (已传原图)")
                     else:
-                        pending[f"img:{wxid}:{m.get('localId')}"] = {
-                            "kind": "image", "wxid": wxid,
-                            "local_id": m.get("localId"), "retries": 0}
+                        key = f"{wxid}:{m.get('localId')}"
+                        pending[key] = {"isSend": m.get("isSend"), "retries": 0}
                         pending_modified = True
-                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> 图片暂存，待重试")
-                elif lt == 34:  # 语音
+                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix} (暂失败，将重试)")
+                elif lt == 34:
                     dur = ""
                     raw = m.get("rawContent") or m.get("content") or ""
                     m_len = re.search(r'voicelength="(\d+)"', str(raw))
                     if m_len:
                         sec = int(m_len.group(1)) // 1000
                         dur = f" {sec}s" if sec < 60 else f" {sec//60}m{sec%60}s"
+                    # 下载 WAV → ONNX 转文字
                     _, wav_b64 = download_media(env, wxid, m.get("localId"))
                     text = ""
                     if wav_b64:
-                        text = transcribe_wav(base64.b64decode(wav_b64)) or ""
-                    body = f"发了语音{dur}{f': {text}' if text else ''}"
-                    line_full = f"{header}\n{body}"
-                    if try_push_text(line_full, client_holder):
-                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> {who} 语音")
-                    else:
-                        _enqueue_text(pending, wxid, m, line_full)
-                        pending_modified = True
-                        on_disconnect()
-                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> 语音暂存，待重试")
+                        wav_bytes = base64.b64decode(wav_b64)
+                        text = transcribe_wav(wav_bytes) or ""
+                    suffix = f": {text}" if text else ""
+                    prefix = f"{who} 发了语音{dur}{suffix}"
+                    queue_push.push(prefix, client_holder[0])
+                    print(f"[{datetime.datetime.now():%H:%M:%S}] -> {prefix}")
                 else:
                     line = fmt(name, m)
                     if not line:
@@ -413,14 +303,8 @@ def process_once(env, contacts, state, echo_names, client_holder, pending):
                     if is_echo(m, echo_names):
                         print(f"[{datetime.datetime.now():%H:%M:%S}] 跳过回声 {line[:40]}")
                         continue
-                    line_full = f"{header}\n{line}"
-                    if try_push_text(line_full, client_holder):
-                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> {header} {line[:20]}")
-                    else:
-                        _enqueue_text(pending, wxid, m, line_full)
-                        pending_modified = True
-                        on_disconnect()
-                        print(f"[{datetime.datetime.now():%H:%M:%S}] -> 暂存待重试 {header}")
+                    queue_push.push(line, client_holder[0])
+                    print(f"[{datetime.datetime.now():%H:%M:%S}] -> {line[:60]}")
             state[wxid] = msg_key(msgs[-1]); changed = True
         except Exception as e:
             print(f"[err] {name}: {e}")
@@ -453,18 +337,11 @@ def parse_sse_revoke(data_line):
 
 
 def init_state(env, contacts, state):
-    for wxid, info in contacts.items():
-        ms = weflow.messages(env, wxid, 40)
-        if not ms:
-            continue
-        name = info.get("name", wxid)
+    for wxid in contacts:
         if wxid not in state:
-            state[wxid] = msg_key(ms[-1])
-            continue
-        # 检查上次转发后来了多少新消息
-        fresh = new_after(ms, state.get(wxid))
-        if fresh:
-            print(f"[启动] {name} 有 {len(fresh)} 条新消息待转发")
+            ms = weflow.messages(env, wxid, 10)
+            if ms:
+                state[wxid] = msg_key(ms[-1])
     save_state(state)
 
 
@@ -483,7 +360,6 @@ def run_sse(env, contacts):
     monitored_ids = set(contacts.keys())  # 只处理这些人的 SSE 事件
     client_holder = [None]
     lock = threading.Lock()
-    ensure_tunnel()  # 启动先确保隧道在
     init_state(env, contacts, state)
     names = [v.get("name", k) for k, v in contacts.items()]
     print(f"SSE 订阅启动，盯：{names}。message.new/revoke 近实时 + {POLL}s 兜底。")
@@ -491,13 +367,8 @@ def run_sse(env, contacts):
     def periodic():
         while True:
             time.sleep(POLL)
-            try:
-                with lock:
-                    process_once(env, contacts, state, echo_names, client_holder, pending)
-            except Exception:
-                import traceback
-                ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                print(f"{ts} [periodic] {traceback.format_exc()}")
+            with lock:
+                process_once(env, contacts, state, echo_names, client_holder, pending)
 
     threading.Thread(target=periodic, daemon=True).start()
 
@@ -531,14 +402,10 @@ def run_sse(env, contacts):
                                         sid = evt.get("sessionId", "")
                                         # 只转发被盯的联系人的撤回
                                         if sid in monitored_ids:
-                                            with lock:
-                                                hdr = f"系统 {ts_str(int(time.time()))}"
-                                                full = f"{hdr}\n{revoke_line}"
-                                                if try_push_text(full, client_holder):
-                                                    print(f"[{datetime.datetime.now():%H:%M:%S}] -> {revoke_line}")
-                                                else:
-                                                    on_disconnect()
-                                                    print(f"[{datetime.datetime.now():%H:%M:%S}] 撤回通知发送失败，已暂记")
+                                            if client_holder[0] is None:
+                                                client_holder[0] = queue_push.make_client()
+                                            queue_push.push(revoke_line, client_holder[0])
+                                            print(f"[{datetime.datetime.now():%H:%M:%S}] -> {revoke_line}")
                                     except Exception:
                                         pass
                         elif ev and ev != "ready":
@@ -556,46 +423,27 @@ def run_poll(env, contacts):
     pending = load_pending()
     echo_names = {v.get("name", k) for k, v in contacts.items()} | {"我"}
     client_holder = [None]
-    ensure_tunnel()  # 启动先确保隧道在
     init_state(env, contacts, state)
     names = [v.get("name", k) for k, v in contacts.items()]
     print(f"轮询监听启动，盯：{names}，每 {POLL}s 一次。")
     while True:
-        try:
-            process_once(env, contacts, state, echo_names, client_holder, pending)
-        except Exception:
-            import traceback
-            ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print(f"{ts} [poll] {traceback.format_exc()}")
+        process_once(env, contacts, state, echo_names, client_holder, pending)
         time.sleep(POLL)
 
 
 def main():
-    try:
-        env = core.load_env()
-        contacts = load_contacts()
+    env = core.load_env()
+    contacts = load_contacts()
 
-        if "--send" in sys.argv:
-            text = sys.argv[sys.argv.index("--send") + 1]
-            print("入队:", queue_push.push(text))
-            return
+    if "--send" in sys.argv:
+        text = sys.argv[sys.argv.index("--send") + 1]
+        print("入队:", queue_push.push(text))
+        return
 
-        if "--poll" in sys.argv:
-            run_poll(env, contacts)
-        else:
-            run_sse(env, contacts)
-    except Exception:
-        import traceback
-        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        msg = f"{ts} FATAL\n{traceback.format_exc()}"
-        print(msg)
-        # 写进日志文件
-        try:
-            with open(HERE / "relay_watch.log", "a", encoding="utf-8") as f:
-                f.write(msg + "\n")
-        except Exception:
-            pass
-        sys.exit(1)
+    if "--poll" in sys.argv:
+        run_poll(env, contacts)
+    else:
+        run_sse(env, contacts)
 
 
 if __name__ == "__main__":
