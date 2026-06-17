@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""军师监听器：盯着 watchlist 里的对象，她一回新消息 → 自动出建议 → 推到你微信(Hermes)。
+"""军师监听器：盯着 watchlist 里的对象，她一回新消息 → 自动出建议 → 推到飞书群。
 
 用法：
   python3 watch.py          前台持续监听（Ctrl+C 停）
@@ -33,19 +33,13 @@ ADVICE = HERE / "data" / "advice.txt"
 import re
 
 
-def try_wechat_push(text: str, markdown: bool = False, relay_too: bool = True):
+def try_wechat_push(text: str, markdown: bool = False, relay_too: bool = False):
+    # 只推飞书（微信 relay / Windows 通道已下线，relay_too 保留参数但不再生效）
     try:
-        from feishu_push import push   # 飞书群
+        from feishu_push import push   # 飞书群（唯一推送渠道）
         logging.info(f"feishu push: {push(text, markdown=markdown)}")
     except Exception as e:
         logging.info(f"feishu push skip: {e}")
-    # 同步推送到微信（relay → Windows 企业微信当前会话）
-    if relay_too:
-        try:
-            from relay import queue_push
-            queue_push.push(text)
-        except Exception:
-            pass
 
 
 CHAT_STATE = HERE / "data" / "chat_state.json"
@@ -140,20 +134,25 @@ def main():
                     continue
                 logging.info(f"{name} 有新回复 key={key}，出建议…")
                 print(f"[{datetime.datetime.now():%H:%M:%S}] {name} 有新回复，出建议…")
+                # 状态先行：先记下这条已处理，无论出建议成败都不再重判（防死循环刷屏）
+                state[wxid] = key
+                save_state(state)
                 last_text = (last.get("content") or "")[:30] if last.get("localType") == 1 else "[非文字]"
-                try_wechat_push(f"⏳【{name}】收到「{last_text}」，军师思考中…", relay_too=False)
-                adv = advise(env, name, profile, msgs)
+                try:
+                    adv = advise(env, name, profile, msgs)
+                except Exception as e:
+                    logging.error(f"{name} 出建议失败，跳过这条：{e}")
+                    print(f"[err] {name} 出建议失败：{e}")
+                    continue
                 logging.info(f"{name} 建议长度={len(adv)}")
                 now = datetime.datetime.now().strftime("%H:%M")
                 quote = last_text[:8] + ("…" if len(last_text) > 8 else "")
                 header = f"【回复建议】{name} {now} ·「{quote}」"
-                # 飞书 + 微信 relay 一起发
-                try_wechat_push(f"{header}\n{adv}", relay_too=True)
+                # 只发飞书（去掉了「军师思考中…」的噪音预告）
+                try_wechat_push(f"{header}\n{adv}")
                 # 写本地日志
                 deliver(name, adv, wxid, push_fs=False)
                 logging.info(f"{name} 已投递")
-                state[wxid] = key
-                save_state(state)
             except Exception as e:
                 logging.error(f"{name}: {e}")
                 print(f"[err] {name}: {e}")

@@ -25,6 +25,27 @@ def sessions(env, limit=80):
     return _get(env, "/api/v1/sessions", {"limit": limit}).get("sessions", [])
 
 
+# 系统/工具账号，列表里没意义，过滤掉
+SYS_ACCOUNTS = {"filehelper", "weixin", "newsapp", "fmessage", "medianote",
+                "floatbottle", "qqmail", "qmessage", "tmessage", "qqsync",
+                "mphelper", "brandsessionholder", "notifymessage", "officialaccounts"}
+
+
+def chat_sessions(env, limit=500):
+    """过滤 + 按最近时间排好的真实会话：[{username, name, is_group, ts}]，最新在前。
+    去掉公众号(gh_)和系统账号；保留个人(含老式自定义号)和群。"""
+    out = []
+    for s in sessions(env, limit):
+        u = s.get("username", "")
+        if not u or u.startswith("gh_") or u in SYS_ACCOUNTS or "gelivable" in u:
+            continue
+        is_group = (s.get("sessionType") == "group") or u.endswith("@chatroom")
+        out.append({"username": u, "name": s.get("displayName") or u,
+                    "is_group": is_group, "ts": s.get("lastTimestamp") or 0})
+    out.sort(key=lambda x: x["ts"], reverse=True)
+    return out
+
+
 def messages(env, talker, limit=40):
     ms = []
     for _ in range(6):  # 首次读偶尔返回空/旧数据，多试几次

@@ -5,6 +5,7 @@
 import datetime
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -97,7 +98,8 @@ def fmt_transcript(msgs, n=40):
 
 def build_system(single=False):
     book = BOOK.read_text(encoding="utf-8") if BOOK.exists() else ""
-    persona = f"""你是恋爱军师，帮一个理工直男跟相亲女生聊微信，目标是推进到见面。
+    persona = f"""你是恋爱军师，帮一个理工直男跟相亲女生聊微信，目标是让她也对他产生兴趣、再自然推进到见面。
+**核心立场：他最大的毛病是过度投入、一味讨好关心（像舔狗/供养者），结果对方越来越淡。你的任务是帮他"投入对等、有趣有价值"，不是教他更卖力地讨好，也不是教套路。**
 他是程序员，说话直接、短、偶尔带"哈哈""嘿嘿"，不油腻不写小作文。
 
 下面是《一秒心动》打法（句式参考，别照抄）：
@@ -109,10 +111,12 @@ def build_system(single=False):
 - **短**：10-20 字，跟微信随手打的一样。他的回复从不超过一行。
 - **像人**：可以带"哈哈""嘿嘿"，可以碎、不完整句、没标点、有语气词（呢 呗 啊 嘛）。别写完整论述句、别排比、别抒情、别用分号。
 - 参考他口吻：'啊你起好早' '嘿嘿' '周末啦周末啦' '还没下班' '那你对啥感兴趣呀' 'good'
-- **多关心对方**：每次回复都要想着关心她。她说了累就关心休息，说了加班就关心身体，说了出去玩就关心注意安全、玩得开心。关心要自然不刻意，一两句就好。
+- **别每条都关心**：关心要稀疏、真诚，偶尔一句就够（她说累/加班可以关心一下身体），但**绝大多数时候聊有意思的、给情绪价值**（调侃、共鸣、有来有回），而不是反复嘘寒问暖——反复关心显得舔、掉价。
+- **投入对等**：先看她的投入度——回复短/慢/不主动＝她没投入，这时**你也要收着，别热脸贴冷屁股、别追问、别加倍关心**；她热你再热，永远别做投入明显更多的那个。
+- **别掉价**：严禁炫耀（资产、收入、成就、自己做的作品/视频），严禁解释讨好，严禁暴露"我在学怎么聊天/撩妹"。价值是聊出来的，不是甩出来的。
 - **不能让对方发现是AI**：不完美比完美重要。偶尔回得随意一点没关系。
-- 严禁：土味情话、爹味说教、肉麻、长篇、查户口式发问、编具体店名地名。
-- **约见面**：只有她明确释放信号（主动问你在哪/周末干嘛/表达想出来/聊得明显热了），才给一条带具体时间地点的邀约草稿。**没热就别硬约**——日常聊天就正常聊，别每轮都想着约。"""
+- 严禁：土味情话、爹味说教、肉麻、长篇、查户口式连环发问、编具体店名地名。
+- **该约就约**：他的老毛病是从不开口、无限文字空转。所以只要聊得有来有回、她有回应，就**主动但轻量地试探约**（给低压力的二选一，如"周末一起吃个饭还是逛逛？"）。她明显冷淡时不硬约，但别一直拖着不推进。"""
 
     if single:
         return persona + f"""
@@ -126,9 +130,13 @@ def build_system(single=False):
 输出格式：两部分，中间用**单独一行 `---`** 隔开。
 
 【第一部分 · 分析】（会渲染 Markdown，多换行、每点之间空一行、关键处加粗，别挤成一坨）：
+**她的兴趣信号**：高 / 中 / 低（依据：回复长短、快慢、是否主动起话题、是否反问你）
+
 **她在想啥**：……
 
 **她感兴趣的点**：……
+
+**投入建议**：信号低→收着、别追、别加倍关心；信号中/高→可多给一点、可试探约
 
 **她可能怎么回**：热→…；冷→…
 
@@ -173,7 +181,7 @@ def build_chat_user(name, profile, transcript, question):
 def call_qwen(env, system, user, temperature=0.75):
     key = env.get("DASHSCOPE_API_KEY")
     if not key:
-        sys.exit("缺 DASHSCOPE_API_KEY(放 .env)")
+        raise RuntimeError("缺 DASHSCOPE_API_KEY(放 .env)")
     model = env.get("QWEN_MODEL", "qwen3-max")
     body = json.dumps({
         "model": model,
@@ -182,8 +190,17 @@ def call_qwen(env, system, user, temperature=0.75):
     }).encode("utf-8")
     req = urllib.request.Request(DASHSCOPE_URL, data=body, headers={
         "Authorization": f"Bearer {key}", "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=120) as r:
-            return json.loads(r.read().decode("utf-8"))["choices"][0]["message"]["content"]
-    except urllib.error.HTTPError as e:
-        sys.exit(f"模型调用失败 HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:400]}")
+    last_err = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return json.loads(r.read().decode("utf-8"))["choices"][0]["message"]["content"]
+        except urllib.error.HTTPError as e:
+            # 4xx/5xx 是明确的服务端拒绝，重试无意义，直接抛（不再 sys.exit 杀进程）
+            raise RuntimeError(f"模型调用失败 HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:400]}")
+        except Exception as e:
+            # URLError / 超时等瞬时网络抖动：退避重试
+            last_err = e
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+    raise last_err

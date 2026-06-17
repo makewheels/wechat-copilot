@@ -16,17 +16,17 @@ import weflow
 PORT = 8765
 
 
-def real_sessions(env):
-    out = []
+def sessions_data(env):
+    """返回 (个人JSON, 群组JSON)，各按最近时间排，喂给前端切换用。"""
+    persons, groups = [], []
     try:
-        for s in weflow.sessions(env, 80):
-            u = s.get("username", "")
-            if not u or u.startswith("gh_") or "@" in u or "gelivable" in u:
-                continue
-            out.append((u, s.get("displayName") or u))
+        for s in weflow.chat_sessions(env):
+            (groups if s["is_group"] else persons).append({"v": s["username"], "n": s["name"]})
     except Exception as e:
-        print("[real_sessions] 读会话失败:", e)
-    return out[:60]
+        print("[sessions_data] 读会话失败:", e)
+    def js(x):
+        return json.dumps(x, ensure_ascii=False).replace("<", "\\u003c")
+    return js(persons), js(groups)
 
 
 def run_coach(data):
@@ -73,12 +73,16 @@ textarea{resize:vertical;min-height:76px}
 .out p{margin:8px 0}
 .hint{color:var(--muted);font-size:14px;margin-top:4px}
 .err{color:#dc2626}
+.seg{display:flex;gap:8px;margin:6px 0 8px}
+.seg button{flex:1;padding:11px;border:1px solid var(--line);background:#fff;border-radius:10px;font-size:16px;cursor:pointer;color:var(--muted)}
+.seg button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
 </style></head><body><div class="wrap">
 <h1>🎯 恋爱军师 · Demo</h1>
 <p class="sub">选个对象 → 自动读你俩的微信对话 → 给你分析 + 草稿。挑一条、改成你的话、自己去微信发。</p>
 
-<label>对象（选了自动读 TA 最近的微信对话）</label>
-<select id="talker"><option value="">— 选一个 —</option>{{OPTIONS}}</select>
+<label>对象（按最近聊天排序）</label>
+<div class="seg"><button type="button" class="on" id="tabP" onclick="sw('p')">👤 个人</button><button type="button" id="tabG" onclick="sw('g')">👥 群组</button></div>
+<select id="talker"><option value="">— 选一个 —</option></select>
 
 <label>对方画像 / 基本信息（可选，但越详细判断越准）</label>
 <textarea id="profile" placeholder="例：28岁，老师，朋友介绍认识，性格慢热但聊得来，喜欢旅游/猫；我的目标是约她周末出来吃饭"></textarea>
@@ -90,6 +94,17 @@ textarea{resize:vertical;min-height:76px}
 <div class="out" id="out"></div>
 
 <script>
+var PERSONS={{PERSONS}}, GROUPS={{GROUPS}};
+function fillSel(list){
+  var s=document.getElementById('talker');
+  s.innerHTML='<option value="">— 选一个（共'+list.length+'）—</option>';
+  for(var i=0;i<list.length;i++){var o=document.createElement('option');o.value=list[i].v;o.textContent=list[i].n;s.appendChild(o);}
+}
+function sw(k){
+  document.getElementById('tabP').className=k==='p'?'on':'';
+  document.getElementById('tabG').className=k==='g'?'on':'';
+  fillSel(k==='p'?PERSONS:GROUPS);
+}
 function md(t){
   t=t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   var L=t.split('\n'),h='',inList=false;
@@ -121,6 +136,7 @@ async function go(){
   btn.disabled=false;btn.textContent='出主意';
   out.scrollIntoView({behavior:'smooth'});
 }
+sw('p');
 </script>
 </div></body></html>"""
 
@@ -137,9 +153,8 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             env = core.load_env()
-            opts = "".join(f'<option value="{html.escape(u)}">{html.escape(n)}</option>'
-                            for u, n in real_sessions(env))
-            self._send(200, PAGE.replace("{{OPTIONS}}", opts))
+            p, g = sessions_data(env)
+            self._send(200, PAGE.replace("{{PERSONS}}", p).replace("{{GROUPS}}", g))
         else:
             self._send(404, "not found")
 

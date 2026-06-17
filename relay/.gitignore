@@ -1,5 +1,0 @@
-.env
-relay_state.json
-*.b64
-*.png
-__pycache__/
