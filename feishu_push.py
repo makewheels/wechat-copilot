@@ -6,6 +6,7 @@
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ENV = Path.home() / "workspace" / "tools" / "wechat-copilot" / ".env"
@@ -29,14 +30,21 @@ def push(text: str, markdown: bool = False, chat_id: str = "") -> dict:
     env.pop("HERMES_HOME", None)
     env.pop("OPENCLAW_HOME", None)
     flag = "--markdown" if markdown else "--text"
-    r = subprocess.run(
-        [cli, "im", "+messages-send", "--as", "bot", "--chat-id", chat, flag, text],
-        capture_output=True, timeout=30, env=env,
-    )
-    out = r.stdout.decode("utf-8", "replace")
-    if '"ok": true' in out or '"ok":true' in out:
-        return {"ok": True}
-    return {"ok": False, "err": (out or r.stderr.decode("utf-8", "replace"))[:200]}
+    last = ""
+    for attempt in range(3):   # 飞书 token 端点偶发 EOF，重试，别丢建议
+        try:
+            r = subprocess.run(
+                [cli, "im", "+messages-send", "--as", "bot", "--chat-id", chat, flag, text],
+                capture_output=True, timeout=30, env=env,
+            )
+            out = r.stdout.decode("utf-8", "replace")
+            if '"ok": true' in out or '"ok":true' in out:
+                return {"ok": True}
+            last = (out or r.stderr.decode("utf-8", "replace"))[:200]
+        except Exception as ex:
+            last = str(ex)
+        time.sleep(1.5 * (attempt + 1))
+    return {"ok": False, "err": last}
 
 
 if __name__ == "__main__":

@@ -1,0 +1,9 @@
+{
+  "_说明": "复制成 data/config.json 填真值。data/ 已被 git 忽略，真值不会进仓库。",
+  "my_wxid": "wxid_xxxxx",
+  "contacts": {
+    "某人": "wxid_yyyyy 或 xxxxx@openim"
+  },
+  "default_target": "某人",
+  "auto_targets": ["某人"]
+}
