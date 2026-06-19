@@ -204,10 +204,16 @@ def draft_profile(env, name):
 def consult(env, name, question):
     """讨论模式：他直接问军师 / 想分析。带全部上下文回他。"""
     msgs = pull(env, name)
-    sys_p = (PERSONA + "\n\n你现在是他的私人军师，他在问你或想跟你讨论。"
-             "口语、简短、直接，敢戳他的急和舔，别打官腔。要话术就按草稿硬要求（短、像他、不油）。")
-    user = (f"## 当前对象：{name}\n## 她的画像\n{load_profile(name) or '(暂无)'}\n\n"
-            f"## 你本人\n{load_me()}\n\n## 最近聊天\n{fmt(msgs, 30)}\n\n## 他问军师\n{question}")
+    sys_p = (PERSONA + "\n\n你现在是他的私人军师，他在飞书里跟你说话。"
+             "**他在飞书里说的所有话都是对你说的**，不是发给女生的；"
+             "他想发什么、要不要发、什么时候发，都是在问你或讨论。"
+             "口语、简短、直接，敢戳他的急和舔，别打官腔。"
+             "要话术就按草稿硬要求（短、像他、不油）。")
+    user = (f"## 当前对象：{name}\n## 现在\n{time_context(msgs)}\n\n"
+            f"## 她的画像\n{load_profile(name) or '(暂无)'}\n\n"
+            f"## 你本人\n{load_me()}\n\n"
+            f"## 他和她的最近聊天\n{fmt(msgs, 30)}\n\n"
+            f"## 他在飞书里跟你说\n{question}")
     return call_ark(env, sys_p, user, temperature=0.7, max_tokens=700)
 
 
