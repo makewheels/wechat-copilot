@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""陪聊 MVP：glm-5.2 + 真实数据标准 + 生成→检测器闸 + 主动时机判定 + 回测渲染。
+"""陪聊 MVP：火山方舟 Agent Plan + 真实数据标准 + 生成→检测器闸 + 主动时机判定 + 回测渲染。
 
 用法（对象名见 data/config.json）：
   python3 chat_copilot.py demo <对象> [N]   # 拿真实历史回测 N 个点 + 主动时机判定 → 渲染网页
@@ -196,7 +196,7 @@ def draft_profile(env, name):
     user = f"女生：{name}\n聊天记录：\n{fmt(msgs, 250)}\n\n提炼她的画像（markdown）。"
     md = call_ark(env, sys_p, user, temperature=0.3, max_tokens=900)
     p = profile_path(name)
-    p.write_text(f"# {name} · 画像\n> glm-5.2 从真实聊天起草，**请核对、改错的、补漏的**。\n\n{md}\n",
+    p.write_text(f"# {name} · 画像\n> 火山方舟 Agent Plan 从真实聊天起草，**请核对、改错的、补漏的**。\n\n{md}\n",
                  encoding="utf-8")
     return p
 
@@ -234,11 +234,13 @@ def route(env, text):
     return d.get("type", "reply"), (d.get("arg") or "")
 
 
-# ---------- glm-5.2 ----------
+# ---------- 火山方舟 Agent Plan ----------
 def call_ark(env, system, user, temperature=0.8, max_tokens=600):
-    base = (env.get("ARK_BASE_URL") or "https://ark.cn-beijing.volces.com/api/coding/v3").rstrip("/")
-    key = env["ARK_API_KEY"]
-    model = env.get("ARK_MODEL", "glm-5.2")
+    base = (env.get("CHAT_BASE_URL") or env.get("ARK_BASE_URL") or "https://ark.cn-beijing.volces.com/api/plan/v3").rstrip("/")
+    key = env.get("CHAT_API_KEY") or env.get("ARK_API_KEY")
+    if not key:
+        raise RuntimeError("缺 CHAT_API_KEY(放 .env；ARK_API_KEY 也可兼容)")
+    model = env.get("CHAT_MODEL") or env.get("ARK_MODEL") or "ark-code-latest"
     body = json.dumps({
         "model": model,
         "messages": [{"role": "system", "content": system},
@@ -420,7 +422,7 @@ ul{{margin:6px 0}} li.x{{color:#bbb;text-decoration:line-through}}
 table.sc{{font-size:14px;color:#666;margin-top:8px;border-collapse:collapse}} .sc td{{border:1px solid #eee;padding:2px 8px}}
 .rs{{font-size:14px;color:#888;margin-top:4px}}
 </style>
-<h1>陪聊 demo · {esc(name)} <span style=font-size:15px;color:#999>glm-5.2 · 真实历史回测</span></h1>
+<h1>陪聊 demo · {esc(name)} <span style=font-size:15px;color:#999>火山 Agent Plan · 真实历史回测</span></h1>
 
 <h2>① 我主动发？——时机判定（纯代码，不靠模型）</h2>
 <div class=tm><span class=v>{esc(tm['verdict'])}</span>　<span class=w>隔 {tm.get('gap_h','?')}h · 发起 我{tm['starts']['我']}/她{tm['starts']['她']}</span><br>{esc(tm['why'])}</div>

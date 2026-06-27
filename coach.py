@@ -8,7 +8,7 @@
   python3 coach.py 王玲 --her "在吗" --intent "约饭" --save   # 顺手把这轮存进 data/
 
 数据：首次用某人会从 ~/Downloads/wechat-history/ 的 zip 自动导入 data/<名字>/。
-模型：DashScope qwen3-max（key 读 .env）。
+模型：火山方舟 Agent Plan（CHAT_* 读 .env）。
 """
 import argparse
 import datetime

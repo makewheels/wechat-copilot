@@ -15,7 +15,8 @@ HERE = Path(__file__).resolve().parent
 HISTORY_DIR = Path.home() / "Downloads" / "wechat-history"
 DATA = HERE / "data"
 BOOK = HERE / "book" / "一秒心动_精要.md"
-DASHSCOPE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+CHAT_BASE_URL = "https://ark.cn-beijing.volces.com/api/plan/v3"
+CHAT_MODEL = "ark-code-latest"
 
 TYPE_TAG = {3: "[图片]", 34: "[语音]", 43: "[视频]", 47: "[表情]", 49: "[链接/小程序]",
             42: "[名片]", 48: "[位置]", 50: "[通话]", 10000: "[系统]"}
@@ -179,16 +180,17 @@ def build_chat_user(name, profile, transcript, question):
 
 
 def call_qwen(env, system, user, temperature=0.75):
-    key = env.get("DASHSCOPE_API_KEY")
+    key = env.get("CHAT_API_KEY") or env.get("ARK_API_KEY")
     if not key:
-        raise RuntimeError("缺 DASHSCOPE_API_KEY(放 .env)")
-    model = env.get("QWEN_MODEL", "qwen3-max")
+        raise RuntimeError("缺 CHAT_API_KEY(放 .env；ARK_API_KEY 也可兼容)")
+    base = (env.get("CHAT_BASE_URL") or env.get("ARK_BASE_URL") or CHAT_BASE_URL).rstrip("/")
+    model = env.get("CHAT_MODEL") or env.get("ARK_MODEL") or CHAT_MODEL
     body = json.dumps({
         "model": model,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         "temperature": temperature,
     }).encode("utf-8")
-    req = urllib.request.Request(DASHSCOPE_URL, data=body, headers={
+    req = urllib.request.Request(base + "/chat/completions", data=body, headers={
         "Authorization": f"Bearer {key}", "Content-Type": "application/json"})
     last_err = None
     for attempt in range(3):

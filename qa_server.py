@@ -5,7 +5,7 @@
 不是 RAG：单人记录直接整段喂模型通读，比向量检索更准（不会漏掉"后来解决了"那段）。
 
 启动: python3 qa_server.py  →  浏览器 http://localhost:8766
-依赖: WeFlow API 在 5031 跑着；.env 里 DASHSCOPE_API_KEY / WEFLOW_*。
+依赖: WeFlow API 在 5031 跑着；.env 里 CHAT_API_KEY / WEFLOW_*。
 """
 import datetime
 import html

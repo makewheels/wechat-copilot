@@ -2,7 +2,7 @@
 """军师 Demo 网页版 —— 自动从 WeFlow 读微信对话 + 你填她的画像 → 出回复建议。
 
 启动: python3 server.py  →  浏览器 http://localhost:8765
-依赖: WeFlow API 在 5031 跑着；.env 里 DASHSCOPE_API_KEY / WEFLOW_*。
+依赖: WeFlow API 在 5031 跑着；.env 里 CHAT_API_KEY / WEFLOW_*。
 """
 import datetime
 import html
